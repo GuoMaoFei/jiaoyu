@@ -1,0 +1,169 @@
+# ===========================================
+# TreeEdu Agent - Git Ignore Configuration
+# ===========================================
+
+# === Sensitive Files ===
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# === Virtual Environments ===
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+
+# === Node.js / Frontend ===
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pnpm-store/
+
+# === Build Outputs ===
+dist/
+dist-ssr/
+*.local
+.cache/
+.parcel-cache/
+.vite/
+
+# === Database Files ===
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# === Logs ===
+logs/
+*.log
+
+# === Uploads & User Data ===
+uploads/
+*.pdf
+!docs/*.pdf
+
+# === IDE & Editors ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+
+# === Operating System ===
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# === Testing ===
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+pytestdebug.log
+
+# === Jupyter Notebooks ===
+.ipynb_checkpoints
+
+# === mypy ===
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# === pytype ===
+.pytype/
+
+# === Cython ===
+cython_debug/
+
+# === AI/Agent Tools ===
+.adal/
+.augment/
+.claude/
+.codebuddy/
+.commandcode/
+.continue/
+.crush/
+.factory/
+.goose/
+.junie/
+.kilocode/
+.kiro/
+.kode/
+.mcpjam/
+.mux/
+.neovate/
+.openhands/
+.pi/
+.pochi/
+.qoder/
+.qwen/
+.roo/
+.trae/
+.vibe/
+.windsurf/
+.zencoder/
+.agent/
+.agents/
+
+# === Temporary Files ===
+*.tmp
+*.temp
+*.bak
+*.backup
+*~
+
+# === Misc ===
+.skills/
+skills-lock.json
+*skills
