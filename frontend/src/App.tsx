@@ -4,8 +4,8 @@ import { useAuthStore } from './stores/useAuthStore';
 import { Spin } from 'antd';
 import MainLayout from './components/layout/MainLayout';
 
-// 懒加载页面
 const Login = lazy(() => import('./pages/auth/Login'));
+const Register = lazy(() => import('./pages/auth/Register'));
 const Bookshelf = lazy(() => import('./pages/student/Bookshelf'));
 const TodayTasks = lazy(() => import('./pages/student/TodayTasks'));
 const Outline = lazy(() => import('./pages/student/Outline'));
@@ -42,6 +42,7 @@ function App() {
         <Routes>
           {/* 公开路由 */}
           <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
 
           {/* 鉴权路由组 */}
           <Route path="/" element={

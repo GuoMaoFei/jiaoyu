@@ -338,6 +338,38 @@
   * `agent/graph.py` — 工具导入修复 + 上下文注入改用 `pi_nodes_json`
   * `routers/materials.py` / `services/guided_learning.py` — 字段引用修复
 
+### [2026-03-08] - 认证系统重构 + 家长端功能完善 + 安全加固
+* **今日完成 (Done)**：
+  * **[后端认证重构]** `routers/auth.py` 大幅重构：
+    - 新增 `verify_password` / `hash_password` 密码加密验证工具
+    - 新增家长注册接口 `POST /api/auth/register/parent`
+    - 学生登录保留（可自动注册机制缺省密码）
+    - 家长登录强制要求密码验证，改用手机号+密码
+    - 绑定家长接口增加学生身份校验 `get_current_student` 依赖
+  * **[前端登录重构]** `Login.tsx` 全新 UI：
+    - 改为 Tab 切换"学生登录"/"家长登录"
+    - 学生端：用户名登录（可自动注册）
+    - 家长端：手机号+密码登录（需先注册）
+    - 新增"立即注册"链接跳转注册页
+  * **[注册页面]** 新增 `Register.tsx` 家长注册页面，支持手机号+密码+昵称
+  * **[路由与类型]** 更新 `api/auth.ts` 适配后端登录接口，`App.tsx` 添加注册路由
+  * **[性能优化]** `student.py` profile 接口优化：改为批量 IN 查询代替循环单查弱节点标题
+  * **[安全加固]** `vision_ocr.py` 新增 SSRF 防护：
+    - URL 白名单校验（仅支持 http/https）
+    - 内部 IP 段拦截（10.x/172.16-31.x/192.168.x/127.x 等）
+    - localhost/local/0.0.0.0 域名禁止
+    - 图片大小限制 10MB
+    - data:image 格式校验
+  * **[配置增强]** `config.py` / `.env.example` 新增配置项支持
+* **修改文件清单**：
+  * `backend/app/routers/auth.py` — 密码验证、家长注册、身份校验
+  * `backend/app/utils/auth.py` — 新增密码哈希工具函数
+  * `frontend/src/pages/auth/Login.tsx` — Tab 切换登录
+  * `frontend/src/pages/auth/Register.tsx` — 新增注册页
+  * `frontend/src/api/auth.ts` — 类型适配
+  * `backend/app/routers/student.py` — 批量查询优化
+  * `backend/app/utils/vision_ocr.py` — SSRF 安全防护
+
 ### [2026-03-07] - 统一书架重构 + 全局字段引用修复
 * **今日完成 (Done)**：
   * **[统一书架重构]** 重写后端 `GET /students/{id}/bookshelf` API，从"只返回已激活教材"改为"返回系统全量教材 + `is_activated` 标记"。`BookshelfItemResponse` Schema 新增 `is_activated`、`grade`、`subject`、`node_count` 字段。

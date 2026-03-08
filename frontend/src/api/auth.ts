@@ -8,6 +8,18 @@ export interface LoginResponse {
     role: string;
 }
 
-/** 简单登录 (返回 Token 与用户基础信息) */
+export interface RegisterRequest {
+    phone_number: string;
+    password: string;
+    nickname?: string;
+}
+
 export const login = (username: string, password?: string, role: string = 'student') =>
     apiClient.post<any, LoginResponse>('/auth/login', { username, password, role });
+
+export const registerParent = (phone_number: string, password: string, nickname?: string) =>
+    apiClient.post<any, LoginResponse>('/auth/register/parent', { 
+        phone_number, 
+        password, 
+        nickname 
+    });

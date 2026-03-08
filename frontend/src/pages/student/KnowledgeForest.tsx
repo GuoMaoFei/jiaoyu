@@ -79,13 +79,29 @@ const KnowledgeForest: React.FC = () => {
             try {
                 const res: any = await startLesson(user.id, nodeId);
                 setLesson(res);
-                navigate(`/cabin/${res.session_id}`);
+                navigate(`/cabin/${res.session_id}?intent=tutor`);
             } catch {
-                // Fallback navigation using the actual materialId from useParams
-                navigate(`/cabin/${materialId || 'demo'}-${nodeId}`);
+                navigate(`/cabin/${materialId || 'demo'}-${nodeId}?intent=tutor`);
             }
         },
         [user?.id, navigate, setLesson, materialId]
+    );
+
+    const handleStartVariant = useCallback(
+        async (nodeId: string) => {
+            if (!user?.id || !materialId) return;
+            const sessionId = `${materialId}-variant-${nodeId}`;
+            setLesson({
+                session_id: sessionId,
+                node_id: nodeId,
+                material_id: materialId,
+                current_step: 'PRACTICE',
+                lesson_id: sessionId,
+                node_title: '变式练习',
+            });
+            navigate(`/cabin/${sessionId}?intent=variant&nodeId=${nodeId}&materialId=${materialId}`);
+        },
+        [user?.id, materialId, navigate, setLesson]
     );
 
     if (loading) {
@@ -141,6 +157,7 @@ const KnowledgeForest: React.FC = () => {
                 node={selectedNode}
                 nodeState={selectedState}
                 onStartLearn={handleStartLearn}
+                onStartVariant={handleStartVariant}
             />
         </div>
     );

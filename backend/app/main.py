@@ -10,26 +10,34 @@ from app.database import get_db
 settings = get_settings()
 
 # Setup logging
-logging.basicConfig(level=logging.INFO)
+log_level = logging.DEBUG if settings.DEBUG else logging.INFO
+logging.basicConfig(level=log_level)
 logger = logging.getLogger(__name__)
 
-# Enable LangChain Debug Logging to trace Agent execution and Prompts
+# Enable LangChain Debug Logging only in debug mode
 from langchain_core.globals import set_debug
-set_debug(True)
+
+set_debug(settings.DEBUG)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
-    description="Backend API for TreeEdu Agent powered by LangGraph & PageIndex"
+    description="Backend API for TreeEdu Agent powered by LangGraph & PageIndex",
 )
 
 # CORS middleware for frontend integration
+allowed_origins = [
+    origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()
+]
+if settings.ENVIRONMENT == "development":
+    allowed_origins.append("*")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Tighten in production
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 # === Register Routers ===
@@ -46,10 +54,12 @@ app.include_router(exam.router)
 
 # === Probe Endpoints ===
 
+
 @app.get("/health", tags=["Probes"])
 async def health_check():
     """Liveness probe endpoint."""
     return {"status": "ok", "version": settings.VERSION}
+
 
 @app.get("/api/db_test", tags=["Probes"])
 async def db_test(db: AsyncSession = Depends(get_db)):
@@ -62,6 +72,8 @@ async def db_test(db: AsyncSession = Depends(get_db)):
         logger.error(f"DB Connection failed: {e}")
         return {"status": "error", "message": str(e)}
 
+
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)

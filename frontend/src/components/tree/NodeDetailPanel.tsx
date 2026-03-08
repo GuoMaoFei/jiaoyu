@@ -10,6 +10,7 @@ interface NodeDetailPanelProps {
     node: KnowledgeNode | null;
     nodeState: NodeState | null;
     onStartLearn: (nodeId: string) => void;
+    onStartVariant: (nodeId: string) => void;
 }
 
 function getHealthColor(score: number): string {
@@ -24,6 +25,7 @@ const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
     node,
     nodeState,
     onStartLearn,
+    onStartVariant,
 }) => {
     if (!node) return null;
 
@@ -88,6 +90,7 @@ const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
                         icon={<ExperimentOutlined />}
                         size="large"
                         block
+                        onClick={() => node && onStartVariant(node.id)}
                     >
                         巩固此节点（变式题）
                     </Button>

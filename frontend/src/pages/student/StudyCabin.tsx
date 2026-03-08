@@ -1,5 +1,5 @@
-import React, { useEffect, useRef, useCallback, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Breadcrumb, Button, message } from 'antd';
 import { ArrowRightOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { useAuthStore } from '../../stores/useAuthStore';
@@ -16,6 +16,7 @@ import type { ChatMessage } from '../../types/chat';
 
 const StudyCabin: React.FC = () => {
     const { sessionId } = useParams<{ sessionId: string }>();
+    const [searchParams] = useSearchParams();
     const navigate = useNavigate();
     const user = useAuthStore((s) => s.user);
     const {
@@ -29,6 +30,10 @@ const StudyCabin: React.FC = () => {
     } = useChatStore();
     const { currentStep, materialId, nodeId, nodeTitle, isCompleted, setLesson } = useLessonStore();
     const { isStreaming, startStream, stopStream } = useSSE('/chat/stream');
+
+    const intent = searchParams.get('intent') || 'tutor';
+    const urlNodeId = searchParams.get('nodeId') || nodeId;
+    const urlMaterialId = searchParams.get('materialId') || materialId;
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const [toolName, setToolName] = useState<string | undefined>();
@@ -52,18 +57,26 @@ const StudyCabin: React.FC = () => {
         // 如果首次进入空会话，发一条欢迎消息
         if (!welcomeAddedRef.current) {
             welcomeAddedRef.current = true;
+            let welcomeContent = '你好！👋 我是你的 AI 伴读神仙。\n\n选择一个知识点，我会用苏格拉底式引导帮你理解它。我们开始吧！';
+            let agentId: ChatMessage['agentId'] = 'tutor';
+            
+            if (intent === 'variant') {
+                welcomeContent = '你好！📝 我是变式出卷机。\n\n我将针对这个知识点为你生成几道变式练习题，帮助你巩固所学。准备好了吗？';
+                agentId = 'variant';
+            }
+            
             addMessage({
                 id: 'welcome',
                 role: 'assistant',
-                content: '你好！👋 我是你的 AI 伴读神仙。\n\n选择一个知识点，我会用苏格拉底式引导帮你理解它。我们开始吧！',
-                agentId: 'tutor',
+                content: welcomeContent,
+                agentId,
                 timestamp: Date.now(),
             });
         }
         return () => {
             stopStream();
         };
-    }, [sessionId]);
+    }, [sessionId, intent]);
 
     // 自动滚动到底部
     useEffect(() => {
@@ -105,12 +118,12 @@ const StudyCabin: React.FC = () => {
             await startStream(
                 {
                     student_id: user.id,
-                    material_id: currentState.materialId || sessionId, // Fallback if missing
-                    node_id: currentState.nodeId || undefined,
-                    lesson_step: currentState.currentStep || undefined, // Inject the current step
+                    material_id: urlMaterialId || currentState.materialId || sessionId,
+                    node_id: urlNodeId || currentState.nodeId || undefined,
+                    lesson_step: currentState.currentStep || undefined,
                     message: text,
                     session_id: sessionId || undefined,
-                    current_intent: 'tutor',
+                    current_intent: intent,
                 },
                 {
                     onMessage: (ev) => {
