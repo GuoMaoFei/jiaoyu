@@ -41,7 +41,7 @@ app.add_middleware(
 )
 
 # === Register Routers ===
-from app.routers import auth, chat, materials, student, lesson, report, exam
+from app.routers import auth, chat, materials, student, lesson, report, exam, quiz
 
 app.include_router(auth.router)
 app.include_router(chat.router)
@@ -50,6 +50,7 @@ app.include_router(student.router)
 app.include_router(lesson.router)
 app.include_router(report.router)
 app.include_router(exam.router)
+app.include_router(quiz.router)
 
 
 # === Probe Endpoints ===

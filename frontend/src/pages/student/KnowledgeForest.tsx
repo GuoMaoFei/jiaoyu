@@ -89,19 +89,9 @@ const KnowledgeForest: React.FC = () => {
 
     const handleStartVariant = useCallback(
         async (nodeId: string) => {
-            if (!user?.id || !materialId) return;
-            const sessionId = `${materialId}-variant-${nodeId}`;
-            setLesson({
-                session_id: sessionId,
-                node_id: nodeId,
-                material_id: materialId,
-                current_step: 'PRACTICE',
-                lesson_id: sessionId,
-                node_title: '变式练习',
-            });
-            navigate(`/cabin/${sessionId}?intent=variant&nodeId=${nodeId}&materialId=${materialId}`);
+            navigate(`/quiz/${nodeId}`);
         },
-        [user?.id, materialId, navigate, setLesson]
+        [navigate]
     );
 
     if (loading) {

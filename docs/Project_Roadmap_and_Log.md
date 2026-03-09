@@ -338,7 +338,56 @@
   * `agent/graph.py` — 工具导入修复 + 上下文注入改用 `pi_nodes_json`
   * `routers/materials.py` / `services/guided_learning.py` — 字段引用修复
 
-### [2026-03-08] - 认证系统重构 + 家长端功能完善 + 安全加固
+### [2026-03-08] - 认证系统重构 + 家长端功能完善 + 安全加固 + 巩固此节点微测功能
+* **今日完成 (Done)**：
+  * **[后端认证重构]** `routers/auth.py` 大幅重构：
+    - 新增 `verify_password` / `hash_password` 密码加密验证工具
+    - 新增家长注册接口 `POST /api/auth/register/parent`
+    - 学生登录保留（可自动注册机制缺省密码）
+    - 家长登录强制要求密码验证，改用手机号+密码
+    - 绑定家长接口增加学生身份校验 `get_current_student` 依赖
+  * **[前端登录重构]** `Login.tsx` 全新 UI：
+    - 改为 Tab 切换"学生登录"/"家长登录"
+    - 学生端：用户名登录（可自动注册）
+    - 家长端：手机号+密码登录（需先注册）
+    - 新增"立即注册"链接跳转注册页
+  * **[注册页面]** 新增 `Register.tsx` 家长注册页面，支持手机号+密码+昵称
+  * **[路由与类型]** 更新 `api/auth.ts` 适配后端登录接口，`App.tsx` 添加注册路由
+  * **[性能优化]** `student.py` profile 接口优化：改为批量 IN 查询代替循环单查弱节点标题
+  * **[安全加固]** `vision_ocr.py` 新增 SSRF 防护：
+    - URL 白名单校验（仅支持 http/https）
+    - 内部 IP 段拦截（10.x/172.16-31.x/192.168.x/127.x 等）
+    - localhost/local/0.0.0.0 域名禁止
+    - 图片大小限制 10MB
+    - data:image 格式校验
+  * **[配置增强]** `config.py` / `.env.example` 新增配置项支持
+  * **[巩固此节点微测功能]** 全新开发：
+    - 后端创建 Quiz Generator 服务，LLM 智能分析并生成题目
+    - 支持单选题、多选题、填空题、简答题
+    - LLM 自动决定题目数量、题型分布、时间限制
+    - 每道题包含详细解题思路
+    - 批改后自动更新节点健康度
+    - 错题自动加入艾宾浩斯复习队列
+    - 支持继续未完成的测试（进度保存）
+    - 全部历史记录永久保留
+  * **[LLM 超时优化]** `llm_router.py` 添加超时和重试配置
+* **修改文件清单**：
+  * `backend/app/routers/auth.py` — 密码验证、家长注册、身份校验
+  * `backend/app/utils/auth.py` — 新增密码哈希工具函数
+  * `frontend/src/pages/auth/Login.tsx` — Tab 切换登录
+  * `frontend/src/pages/auth/Register.tsx` — 新增注册页
+  * `frontend/src/api/auth.ts` — 类型适配
+  * `backend/app/routers/student.py` — 批量查询优化
+  * `backend/app/utils/vision_ocr.py` — SSRF 安全防护
+  * `backend/app/models/quiz.py` — 新增 NodeQuiz 模型
+  * `backend/app/schemas/quiz.py` — Quiz 相关 Schema
+  * `backend/app/services/quiz_generator.py` — 智能出题服务
+  * `backend/app/routers/quiz.py` — Quiz API 端点
+  * `frontend/src/types/quiz.ts` — TypeScript 类型
+  * `frontend/src/api/quiz.ts` — API 封装
+  */student/Node `frontend/src/pagesQuiz.tsx` — 做题页面
+  * `frontend/src/pages/student/QuizResult.tsx` — 成绩单页面
+  * `frontend/src/components/tree/NodeDetailPanel.tsx` — 历史记录展示
 * **今日完成 (Done)**：
   * **[后端认证重构]** `routers/auth.py` 大幅重构：
     - 新增 `verify_password` / `hash_password` 密码加密验证工具

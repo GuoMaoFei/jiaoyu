@@ -18,6 +18,8 @@ const Profile = lazy(() => import('./pages/student/Profile'));
 const Diagnostic = lazy(() => import('./pages/student/Diagnostic'));
 const Exam = lazy(() => import('./pages/student/Exam'));
 const ScoreReport = lazy(() => import('./pages/student/ScoreReport'));
+const NodeQuiz = lazy(() => import('./pages/student/NodeQuiz'));
+const QuizResult = lazy(() => import('./pages/student/QuizResult'));
 
 const ProtectedRoute = ({ children }: { children: ReactNode }) => {
   const isAuthenticated = useAuthStore((state) => state.isAuthenticated);
@@ -63,6 +65,8 @@ function App() {
             <Route path="diagnostic/:materialId" element={<Diagnostic />} />
             <Route path="exam/:examId" element={<Exam />} />
             <Route path="score/:examId" element={<ScoreReport />} />
+            <Route path="quiz/:nodeId" element={<NodeQuiz />} />
+            <Route path="quiz-result/:quizId" element={<QuizResult />} />
           </Route>
         </Routes>
       </Suspense>

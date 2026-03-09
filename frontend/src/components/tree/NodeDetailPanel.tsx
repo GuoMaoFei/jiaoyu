@@ -1,8 +1,11 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Drawer, Progress, Button, Tag, Empty } from 'antd';
-import { PlayCircleOutlined, ExperimentOutlined } from '@ant-design/icons';
+import { PlayCircleOutlined, ExperimentOutlined, HistoryOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import type { NodeState } from '../../types/student';
 import type { KnowledgeNode } from '../../types/material';
+import { getQuizHistory } from '../../api/quiz';
+import { useAuthStore } from '../../stores/useAuthStore';
 
 interface NodeDetailPanelProps {
     open: boolean;
@@ -27,6 +30,21 @@ const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
     onStartLearn,
     onStartVariant,
 }) => {
+    const navigate = useNavigate();
+    const user = useAuthStore((s) => s.user);
+    const [history, setHistory] = useState<any[]>([]);
+    const [loadingHistory, setLoadingHistory] = useState(false);
+
+    useEffect(() => {
+        if (!open || !node || !user?.id) return;
+        
+        setLoadingHistory(true);
+        getQuizHistory(user.id, node.id)
+            .then(setHistory)
+            .catch(() => setHistory([]))
+            .finally(() => setLoadingHistory(false));
+    }, [open, node?.id, user?.id]);
+
     if (!node) return null;
 
     const healthScore = nodeState?.health_score ?? 0;
@@ -100,6 +118,52 @@ const NodeDetailPanel: React.FC<NodeDetailPanelProps> = ({
                 <div className="w-full mt-4">
                     <h4 className="text-sm font-semibold text-slate-700 mb-2">关联错题</h4>
                     <Empty description="暂无错题记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                </div>
+
+                {/* 历史微测记录 */}
+                <div className="w-full mt-4">
+                    <h4 className="text-sm font-semibold text-slate-700 mb-2 flex items-center gap-1">
+                        <HistoryOutlined /> 历史微测
+                    </h4>
+                    {loadingHistory ? (
+                        <div className="text-center text-slate-400 text-sm">加载中...</div>
+                    ) : history.length === 0 ? (
+                        <Empty description="暂无微测记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                    ) : (
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                            {history.slice(0, 5).map((item: any) => (
+                                <div
+                                    key={item.id}
+                                    className="flex items-center justify-between bg-slate-50 rounded-lg p-2 text-sm"
+                                >
+                                    <div className="flex items-center gap-2">
+                                        {item.score !== null ? (
+                                            <Tag color={item.accuracy_pct >= 60 ? 'green' : 'red'}>
+                                                {Math.round(item.accuracy_pct)}%
+                                            </Tag>
+                                        ) : (
+                                            <Tag>进行中</Tag>
+                                        )}
+                                        <span className="text-slate-500">
+                                            {item.question_count}题
+                                        </span>
+                                    </div>
+                                    <Button
+                                        type="link"
+                                        size="small"
+                                        onClick={() => navigate(`/quiz/${node.id}`)}
+                                    >
+                                        {item.score !== null ? '查看' : '继续'}
+                                    </Button>
+                                </div>
+                            ))}
+                            {history.length > 5 && (
+                                <div className="text-center text-xs text-slate-400">
+                                    还有 {history.length - 5} 条记录
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
         </Drawer>
