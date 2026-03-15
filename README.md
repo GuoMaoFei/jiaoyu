@@ -242,12 +242,19 @@ IMPORT (预热导入) → EXPLAIN (深入讲解) → EXAMPLE (典型例题) → 
 - `GET /api/students/{id}/bookshelf` - 获取书架
 
 ### 课程
-- `POST /api/lesson/start` - 开始学习
-- `POST /api/lesson/advance` - 进入下一阶段
+- `POST /api/lessons/start` - 开始学习
+- `POST /api/lessons/advance` - 进入下一阶段
+- `GET /api/lessons/plans/{student_id}` - 获取学习计划（含日期范围）
+- `POST /api/lessons/plans/generate` - 生成学习计划
+- `DELETE /api/lessons/plans/{student_id}` - 清除学习计划
+- `POST /api/lessons/save-progress` - 保存答题进度
 
-### 考试
-- `POST /api/exam/generate` - 生成试卷
-- `POST /api/exam/submit` - 提交答案
+### 微测
+- `POST /api/quizzes/generate` - 生成微测题目
+- `POST /api/quizzes/submit` - 提交微测答案
+- `GET /api/quizzes/unfinished/{student_id}/{node_id}` - 获取未完成微测
+- `GET /api/quizzes/{quiz_id}` - 获取微测详情
+- `GET /api/quizzes/history/{student_id}/{node_id}` - 获取历史微测记录
 
 ### 报告
 - `GET /api/report/parent/{student_id}` - 家长报告

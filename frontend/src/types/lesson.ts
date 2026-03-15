@@ -37,6 +37,7 @@ export type TaskType = 'LEARN_NEW' | 'DO_QUIZ' | 'REVIEW_VARIANT';
 
 export interface PlanItem {
     id: string;
+    node_id: string;
     type: TaskType;
     title: string;
     completed: boolean;
@@ -47,4 +48,6 @@ export interface PlanItem {
 export interface PlanListResponse {
     student_id: string;
     items: PlanItem[];
+    start_date?: string;
+    end_date?: string;
 }

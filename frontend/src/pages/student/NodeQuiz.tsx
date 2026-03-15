@@ -96,12 +96,31 @@ const NodeQuiz: React.FC = () => {
                 setPaper(res);
                 setQuizId(res.id);
                 setTimeLeft(res.time_limit_min * 60);
-                // 清除之前的进度
                 localStorage.removeItem(`quiz_progress_${res.id}`);
             })
             .catch(err => {
-                message.error('获取题目失败：' + err.message);
-                navigate(-1);
+                const errMsg = err.message || '';
+                if (errMsg.includes('未完成的测试')) {
+                    message.warning('已有未完成的测试，正在加载...');
+                    getUnfinishedQuiz(user.id, nodeId)
+                        .then(unfinished => {
+                            if (unfinished) {
+                                setPaper(unfinished);
+                                setQuizId(unfinished.id);
+                                setTimeLeft(unfinished.time_limit_min * 60);
+                                const saved = localStorage.getItem(`quiz_progress_${unfinished.id}`);
+                                if (saved) {
+                                    const progress = JSON.parse(saved);
+                                    setAnswers(progress.answers || {});
+                                    setCurrentIndex(progress.currentIndex || 0);
+                                }
+                            }
+                        })
+                        .finally(() => setLoading(false));
+                } else {
+                    message.error('获取题目失败：' + errMsg);
+                    navigate(-1);
+                }
             })
             .finally(() => setLoading(false));
     };

@@ -271,6 +271,10 @@ async def generate_node_quiz(
     student_id: str, node_id: str, db: AsyncSession
 ) -> QuizPaper:
     """生成微测完整流程"""
+    existing_unfinished = await get_unfinished_quiz(student_id, node_id, db)
+    if existing_unfinished:
+        raise ValueError("已有未完成的测试，请先完成或删除现有测试")
+
     node = await get_node_content(node_id, db)
     if not node:
         raise ValueError(f"Node {node_id} not found")

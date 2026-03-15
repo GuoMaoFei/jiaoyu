@@ -27,3 +27,7 @@ export const generateStudyPlan = (studentId: string, materialId: string, startDa
         start_date: startDate,
         sessions_per_week: sessionsPerWeek,
     });
+
+/** 清除学习计划 */
+export const clearStudyPlans = (studentId: string) =>
+    apiClient.delete<any, { status: string; message: string }>(`/lessons/plans/${studentId}`);

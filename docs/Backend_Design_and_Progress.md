@@ -4,7 +4,7 @@
 
 智树 (TreeEdu) Agent 的后端旨在构建一个**严格遵循教纲边界**、**提供 24 小时苏格拉底式启发**的教育智能体平台。
 
-> **当前状态**：后端全部完成 ✅。五大 Agent + 10 个 LangGraph 工具 + 19 个 FastAPI 端点 + SSE 流式对话 + OCR 视觉 + 艾宾浩斯复习引擎。**V1.1 重构**：完成 KnowledgeNode/KnowledgeContent 骨肉分离 + 推理型 RAG 四步检索链 + 统一书架改造。
+> **当前状态**：后端全部完成 ✅。五大 Agent + 10 个 LangGraph 工具 + 19 个 FastAPI 端点 + SSE 流式对话 + OCR 视觉 + 艾宾浩斯复习引擎。**V1.1 重构**：完成 KnowledgeNode/KnowledgeContent 骨肉分离 + 推理型 RAG 四步检索链 + 统一书架改造。**V1.2 优化**：实现方案 C 动态 LLM 选择（根据五步教学阶段分级调度模型）+ 学习舱自动讲解。
 
 ### 1.1 核心技术栈与架构模式
 - **Web 框架**: FastAPI - 提供全异步的基础架构与 Swagger API 支持。
@@ -53,15 +53,31 @@
 
 ### 2.3 大模型多业态网关与配置管理 (Model Config & Gateway)
 在复杂的教育智能体中，让一个顶级大模型处理所有事务会导致延迟和算力成本灾难。系统在 `utils/llm_router.py` 内部引入了**模型工厂与业态管理层**，按需供给：
-1. **轻型调度流 (Fast & Cheap, 如 qwen-max-latest)**：
-   - **使用方**：Supervisor 意图路由节点、Planner 计划排期生成、Reporter 家长周报生成。
+1. **轻型调度流 (Fast, 如 qwen-plus)**：
+   - **使用方**：Supervisor 意图路由节点、Planner 计划排期生成、Reporter 家长周报生成、**Tutor Agent 的 IMPORT/PRACTICE 阶段**。
    - **特性**：JSON 结构化输出极快，极其适合“数据处理与任务分发”这种不涉及重度逻辑推演的业务。
-2. **重度推理与共情流 (Heavy Reasoning, 如 qwen-max-latest / DeepSeek-R1)**：
-   - **使用方**：Tutor 伴读神仙的苏格拉底发问、Assessor 客观评分员的答案对齐。
+2. **中型推理流 (Medium, 如 qwen-turbo)**：
+   - **使用方**：Tutor Agent 的 EXAMPLE/SUMMARY 阶段。
+   - **特性**：平衡成本与效果，适合需要一定推理但不需要最顶级模型的任务。
+3. **重度推理与共情流 (Heavy, 如 qwen-max-latest / DeepSeek-R1)**：
+   - **使用方**：Tutor Agent 的 EXPLAIN 深入讲解阶段、Assessor 客观评分员的答案对齐。
    - **特性**：需要吃透知识树的绝对定位与历史错因（Structural Memory），给出极为高商且丝滑的教学引导。
-3. **多模态视觉流 (Vision-Language, 如 qwen-vl-max-latest)**：
+4. **多模态视觉流 (Vision-Language, 如 qwen-vl-max-latest)**：
    - **使用方**：专门支持 `vision_ocr.py` 的手写体图片转录与 LaTeX 公式识别。
-系统通过环境配置文件 (`config.py` 与 `.env`) 建立多通道管理机制，使得三大业态模型可以随时独立替换供应商。目前系统已**全面切换至阿里云通义千问大模型阵列**，在保证顶级推理效果的情况下实现了极大成本节约和国内访问稳定性。
+
+#### 2.3.1 五步教学法动态模型调度策略
+为了进一步优化成本和响应速度，系统针对 Tutor Agent 的五步闯关教学阶段实现了**动态模型选择**：
+| 教学阶段 | 模型类型 | 具体模型 | Temperature | 特点 |
+|---------|---------|---------|-------------|------|
+| IMPORT (🔥 基础预热) | Fast | qwen-plus | 0.7 | 生活化类比、激发兴趣、响应速度快 |
+| EXPLAIN (📖 深入讲解) | Heavy | qwen-max | 0.2 | 深度讲解、知识准确性、逻辑严密 |
+| EXAMPLE (✏️ 典型例题) | Medium | qwen-turbo | 0.3 | 逻辑推理、步骤清晰 |
+| PRACTICE (🎯 上手实操) | Fast | qwen-plus | 0.5 | 快速评判、简洁反馈 |
+| SUMMARY (🏆 总结复盘) | Medium | qwen-turbo | 0.3 | 结构化总结、知识点提炼 |
+
+**预期效果**：响应速度提升约 40%，API 成本降低约 35%，同时保证核心教学阶段（EXPLAIN）的质量。
+
+系统通过环境配置文件 (`config.py` 与 `.env`) 建立多通道管理机制，使得四大业态模型可以随时独立替换供应商。目前系统已**全面切换至阿里云通义千问大模型阵列**，在保证顶级推理效果的情况下实现了极大成本节约和国内访问稳定性。
 
 
 ## 3. 分阶段开发拆解 (Long-Term Sprint Roadmap)
@@ -71,7 +87,7 @@
 ### Sprint 1：基础设施骨架与基底能力 (Week 1)
 这是整个万里长征的第一步，重塑干净的底盘。
 1. **环境与容器化**：初始化基于 `FastAPI` / `uvicorn` 的标准异步后端结构，确立 `requirements.txt` 和 `.env` 鉴权标准。
-2. **大模型网关 (`utils/llm_router.py`)**：率先封装 Fast(调度) / Heavy(推理) / Vision(视觉) 三通道模型 API 接口，并写单元测试跑通。
+2. **大模型网关 (`utils/llm_router.py`)**：率先封装 Fast(调度) / Medium(中等推理) / Heavy(推理) / Vision(视觉) 四通道模型 API 接口，并写单元测试跑通。
 3. **ORM 物理层建立**：部署 `database.py` 引擎，并通过 `Alembic` 建表拉起最基础的三大模型文件 (教材树 `material.py`、身份 `user.py`、跨端对话 `chat.py`)。
 
 ### Sprint 2：跨模态知识树构建与长时记忆引擎入库 (Week 2)
@@ -99,10 +115,15 @@
 
 ### Sprint 5：变式题库、复查机制与封测联调 (Week 5+) ✅ 已完成
 查漏补缺与高阶功能的下发。
-1. **变式出卷机 (Variant Agent)**：打通 `services/testing_gen.py`。**深度联动 PageIndex**: 根据传入的薄弱 `node_id`，利用 PageIndex 树状检索找出同一叶子节点下的“官方标准题源”，基于同构知识树模型，大模型剥离原考点，生成全新的 Markdown 物理快照试卷。
-2. **自动学情观察员 (Reporter Agent)**：**深度联动 PageIndex**: Agent 会按需扫表，根据 PageIndex 教材树的章节聚类结构（例如发现 Chapter 1 下属的 5 个 Concept Node 均变红），自动总结出结构化的家长 Markdown 报告（“第一章代数基础极不牢固，集中在解方程节点”）。
-3. **艾宾浩斯打捞**：实现 `services/adaptive_review.py` 定时触发器，强行注入旧错题。
-4. **并发抢占处理**：在核心接口中补充并发压测，必要时升级为悲观锁。
+1. **变式出卷机 (Variant Agent)**：打通 `services/testing_gen.py`。**深度联动 PageIndex**: 根据传入的薄弱 `node_id`，利用 PageIndex 树状检索找出同一叶子节点下的"官方标准题源"，基于同构知识树模型，大模型剥离原考点，生成全新的 Markdown 物理快照试卷。
+2. **微测生成模块**：实现 `services/quiz_generator.py`。基于知识节点动态生成微测试卷，包含：
+   - LLM 分析节点复杂度、学生历史表现，决定出题策略
+   - 动态生成题目数量、题型分布、时间限制
+   - 支持单选题、填空题、简答题等多种题型
+   - 答题进度保存与恢复
+3. **自动学情观察员 (Reporter Agent)**：**深度联动 PageIndex**: Agent 会按需扫表，根据 PageIndex 教材树的章节聚类结构（例如发现 Chapter 1 下属的 5 个 Concept Node 均变红），自动总结出结构化的家长 Markdown 报告（"第一章代数基础极不牢固，集中在解方程节点"）。
+4. **艾宾浩斯打捞**：实现 `services/adaptive_review.py` 定时触发器，强行注入旧错题。
+5. **并发抢占处理**：在核心接口中补充并发压测，必要时升级为悲观锁。
 
 ---
 
@@ -117,18 +138,21 @@ backend/
 │   ├── config.py           # Pydantic Settings
 │   ├── database.py         # SQLAlchemy Engine & SessionMaker
 │   ├── models/             # ORM 模型定义 (PRD 中的六大领域)
+│   │   ├── lesson.py       # 学习计划、进度相关模型
+│   │   └── quiz.py         # 微测题目、成绩模型
 │   ├── schemas/            # Request/Response Pydantic 校验类
 │   ├── routers/            # 统管 API 入口
-│   │   ├── materials.py    # 包含树查询、建树触发
-│   │   ├── student.py      # 计划与学习进度 API (Onboarding, Lessons)
+│   │   ├── materials.py    # 包含树查询，建树触发
+│   │   ├── lesson.py       # 学习计划、学习进度 API
+│   │   ├── quiz.py         # 微测生成、提交 API
 │   │   ├── chat.py         # LangGraph 会话交互路由
 │   │   └── testing.py      # 生成试卷与复习管理 API
 │   ├── services/           # 核心业务组件
 │   │   ├── tree_builder.py # PageIndex 知识树构建任务
-│   │   ├── onboarding.py   # 破冰与计划调度引擎
-│   │   ├── guided_learning.py # 对话式课程进度跟踪器
-│   │   ├── adaptive_review.py # 艾宾浩斯衰退算法与拦截器
-│   │   └── testing_gen.py  # 组卷与快照固化逻辑
+│   │   ├── quiz_generator.py # 微测生成服务
+│   │   ├── guided_learning.py # 五步导学服务
+│   │   ├── adaptive_review.py # 艾宾浩斯遗忘算法
+│   │   └── memory_overlay.py  # 学习记忆叠加
 │   ├── agent/              # LangGraph Multi-Agent 核心大脑群 🧠
 │   │   ├── state.py        # 全局协同 State 定义 (持全局黑板)
 │   │   ├── graph.py        # Supervisor 路由主干图编译
@@ -137,10 +161,11 @@ backend/
 │   │       ├── planner.py  # 学情规划排期 Agent
 │   │       ├── assessor.py # 铁血评分判定 Agent
 │   │       ├── variant.py  # 变式造题引擎 Agent
-│   │       └── reporter.py # 家长周报生成 Agent [NEW]
+│   │       └── reporter.py # 家长周报生成 Agent
 │   └── utils/              # 通用功能 (OCR连接、日志等)
-│       ├── llm_router.py   # 大模型业态网关，分发快慢模型 [NEW]
-│       └── vision_ocr.py   # 封装大模型 Vision 能力解析手写错题 [NEW]
+│       ├── llm_router.py   # 大模型业态网关，分发快慢模型
+│       ├── vision_ocr.py   # 封装大模型 Vision 能力解析手写错题
+│       └── vlm_catalog.py  # VLM 目录提取工具
 ├── alembic/                # DB Migration 脚本目录
 ├── requirements.txt        # 最新版核心生态全家桶
 └── .env.example

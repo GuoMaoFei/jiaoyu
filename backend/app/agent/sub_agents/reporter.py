@@ -1,11 +1,15 @@
 """
 Reporter Agent (学情观察员) - Generates structured learning reports for parents.
 """
+
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from app.agent.state import AgentState
 from app.utils.llm_router import get_heavy_model
-from app.agent.tools.reporter_tools import get_chapter_health_report, get_mistake_summary
+from app.agent.tools.reporter_tools import (
+    get_chapter_health_report,
+    get_mistake_summary,
+)
 
 REPORTER_SYSTEM_PROMPT = """
 You are "Reporter Agent" (学情观察员), a caring and insightful learning analytics reporter for the TreeEdu system.
@@ -35,28 +39,32 @@ Material ID: {material_id}
 """
 
 
-def reporter_node(state: AgentState):
+async def reporter_node(state: AgentState):
     """
     The node representing the Reporter Agent logic.
     Queries learning data and generates a structured parent report.
     """
     print("--- ENTER REPORTER NODE ---")
-    
+
     model = get_heavy_model(temperature=0.3)
     tools = [get_chapter_health_report, get_mistake_summary]
     model_with_tools = model.bind_tools(tools)
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", REPORTER_SYSTEM_PROMPT),
-        MessagesPlaceholder(variable_name="messages"),
-    ])
-    
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", REPORTER_SYSTEM_PROMPT),
+            MessagesPlaceholder(variable_name="messages"),
+        ]
+    )
+
     chain = prompt | model_with_tools
-    
-    response = chain.invoke({
-        "messages": state["messages"],
-        "student_id": state["student_id"],
-        "material_id": state["material_id"] or "all",
-    })
-    
+
+    response = await chain.ainvoke(
+        {
+            "messages": state["messages"],
+            "student_id": state["student_id"],
+            "material_id": state["material_id"] or "all",
+        }
+    )
+
     return {"messages": [response]}

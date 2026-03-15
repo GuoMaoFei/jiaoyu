@@ -25,6 +25,7 @@ class Settings(BaseSettings):
 
     # Router Settings
     LLM_FAST_MODEL: str = "aliyun"
+    LLM_MEDIUM_MODEL: str = "aliyun"
     LLM_HEAVY_MODEL: str = "aliyun"
     LLM_VISION_MODEL: str = "aliyun"
 

@@ -1,6 +1,7 @@
 """
 Planner Agent (规划统筹师) - Generates study plans by analyzing the knowledge tree.
 """
+
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage
 
@@ -33,35 +34,39 @@ Student's Weakness Summary: {weakness_summary}
 """
 
 
-def planner_node(state: AgentState):
+async def planner_node(state: AgentState):
     """
     The node representing the Planner Agent logic.
     Reads the knowledge tree and generates a structured study plan.
     """
     print("--- ENTER PLANNER NODE ---")
-    
+
     # 1. Build the LLM with the planning tools bound
     model = get_heavy_model(temperature=0.2)
     tools = [create_study_plan, get_material_node_list]
     model_with_tools = model.bind_tools(tools)
-    
+
     # 2. Compile the Prompt
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", PLANNER_SYSTEM_PROMPT),
-        MessagesPlaceholder(variable_name="messages"),
-    ])
-    
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", PLANNER_SYSTEM_PROMPT),
+            MessagesPlaceholder(variable_name="messages"),
+        ]
+    )
+
     # 3. Read context
     tutor_ctx = state.get("tutor_context", {})
-    
+
     chain = prompt | model_with_tools
-    
-    response = chain.invoke({
-        "messages": state["messages"],
-        "student_id": state["student_id"],
-        "material_id": state["material_id"] or "Unknown",
-        "avg_health_score": tutor_ctx.get("current_health_score", 50),
-        "weakness_summary": tutor_ctx.get("historical_mistakes", "暂无"),
-    })
-    
+
+    response = await chain.ainvoke(
+        {
+            "messages": state["messages"],
+            "student_id": state["student_id"],
+            "material_id": state["material_id"] or "Unknown",
+            "avg_health_score": tutor_ctx.get("current_health_score", 50),
+            "weakness_summary": tutor_ctx.get("historical_mistakes", "暂无"),
+        }
+    )
+
     return {"messages": [response]}

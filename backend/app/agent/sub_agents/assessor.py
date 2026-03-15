@@ -30,38 +30,42 @@ Current Knowledge Node (if known): {node_id}
 """
 
 
-def assessor_node(state: AgentState):
+async def assessor_node(state: AgentState):
     """
     The node representing the Assessor Agent logic.
     It reads the conversation, evaluates the student's last answer,
     and calls the save_assessment tool to persist the result.
     """
     print("--- ENTER ASSESSOR NODE ---")
-    
+
     # 1. Read context
     assessor_ctx = state.get("assessor_context", {})
     node_id = assessor_ctx.get("target_node_id", "unknown")
-    
+
     # 2. Build the LLM with the assessment tool bound
     model = get_heavy_model(temperature=0.0)
     tools = [save_assessment]
     model_with_tools = model.bind_tools(tools)
-    
+
     # 3. Compile the Prompt
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", ASSESSOR_SYSTEM_PROMPT),
-        MessagesPlaceholder(variable_name="messages"),
-    ])
-    
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", ASSESSOR_SYSTEM_PROMPT),
+            MessagesPlaceholder(variable_name="messages"),
+        ]
+    )
+
     # Create the chain
     chain = prompt | model_with_tools
-    
+
     # 4. Invoke the Model
-    response = chain.invoke({
-        "messages": state["messages"],
-        "student_id": state["student_id"],
-        "material_id": state["material_id"] or "Unknown",
-        "node_id": node_id,
-    })
-    
+    response = await chain.ainvoke(
+        {
+            "messages": state["messages"],
+            "student_id": state["student_id"],
+            "material_id": state["material_id"] or "Unknown",
+            "node_id": node_id,
+        }
+    )
+
     return {"messages": [response]}

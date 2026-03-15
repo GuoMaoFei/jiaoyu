@@ -1,6 +1,7 @@
 """
 Variant Agent (变式出卷机) - Generates variant questions based on knowledge tree nodes.
 """
+
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from app.agent.state import AgentState
@@ -32,32 +33,38 @@ Target Node ID: {node_id}
 """
 
 
-def variant_node(state: AgentState):
+async def variant_node(state: AgentState):
     """
     The node representing the Variant Agent logic.
     Generates variant questions based on existing questions and knowledge node content.
     """
     print("--- ENTER VARIANT NODE ---")
-    
-    model = get_heavy_model(temperature=0.7)  # Higher temperature for creative variation
+
+    model = get_heavy_model(
+        temperature=0.7
+    )  # Higher temperature for creative variation
     tools = [get_node_questions, save_variant_question]
     model_with_tools = model.bind_tools(tools)
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", VARIANT_SYSTEM_PROMPT),
-        MessagesPlaceholder(variable_name="messages"),
-    ])
-    
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", VARIANT_SYSTEM_PROMPT),
+            MessagesPlaceholder(variable_name="messages"),
+        ]
+    )
+
     # Determine target node
     assessor_ctx = state.get("assessor_context", {})
     node_id = assessor_ctx.get("target_node_id", "unknown")
-    
+
     chain = prompt | model_with_tools
-    
-    response = chain.invoke({
-        "messages": state["messages"],
-        "student_id": state["student_id"],
-        "node_id": node_id,
-    })
-    
+
+    response = await chain.ainvoke(
+        {
+            "messages": state["messages"],
+            "student_id": state["student_id"],
+            "node_id": node_id,
+        }
+    )
+
     return {"messages": [response]}

@@ -2,8 +2,9 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import AIMessage, HumanMessage
 
 from app.agent.state import AgentState
-from app.utils.llm_router import get_heavy_model
+from app.utils.llm_router import get_heavy_model, get_medium_model, get_fast_model
 from app.agent.tools.pageindex_tools import search_knowledge_tree
+from langchain_core.language_models.chat_models import BaseChatModel
 
 # Socratic System Prompt Base
 TUTOR_SYSTEM_PROMPT_BASE = """
@@ -61,7 +62,7 @@ STEP_TEACHING_DIRECTIVES = {
 你的任务：
 1. 展示在 Context 中提供的【Example Content】例题。
 2. 绝对不要直接给出完整解答！而是采用苏格拉底式提问，引导学生一步步推导解答过程。
-3. 比如第一步，你可以问：“已知这些条件，你觉得第一步该从哪里入手？”
+3. 比如第一步，你可以问："已知这些条件，你觉得第一步该从哪里入手？"
 4. 学生答对当前步骤后，你再引导下一步；答错则给予小提示再试一次。
 """,
     "PRACTICE": """
@@ -78,38 +79,66 @@ STEP_TEACHING_DIRECTIVES = {
 1. 用简明的要点列表总结本节学习的核心内容。
 2. 🚀 [非常重要] 你必须在总结的末尾，为你今天讲解的内容提炼出 3-5 个核心【Knowledge Points (知识点考向标签)】。告诉学生哪些知识点明天需要着重复习，哪些容易和旧知识混淆。
 3. 简短回顾一下学生在刚才练习阶段的表现，指出做得好的地方。
-4. 给出一句鼓励性的结语，例如：“这节课你学得很棒！下一节的内容已经解锁了，随时可以继续挑战哦！”
-"""
+4. 给出一句鼓励性的结语，例如："这节课你学得很棒！下一节的内容已经解锁了，随时可以继续挑战哦！"
+""",
 }
 
-def tutor_node(state: AgentState):
+STEP_MODEL_STRATEGY = {
+    "IMPORT": ("fast", 0.7),
+    "EXPLAIN": ("heavy", 0.2),
+    "EXAMPLE": ("medium", 0.3),
+    "PRACTICE": ("fast", 0.5),
+    "SUMMARY": ("medium", 0.3),
+}
+
+
+def get_model_for_step(step: str) -> tuple[BaseChatModel, float]:
+    """根据教学阶段选择合适的 LLM"""
+    model_type, temp = STEP_MODEL_STRATEGY.get(step, ("heavy", 0.2))
+
+    if model_type == "fast":
+        return get_fast_model(temperature=temp), temp
+    elif model_type == "medium":
+        return get_medium_model(temperature=temp), temp
+    else:
+        return get_heavy_model(temperature=temp), temp
+
+
+async def tutor_node(state: AgentState):
     """
     The node representing the Socratic Tutor logic.
     """
     print("--- ENTER TUTOR NODE ---")
-    
+
     # 1. Read context
     tutor_ctx = state.get("tutor_context", {})
     health_score = tutor_ctx.get("current_health_score", 50)
     history = tutor_ctx.get("historical_mistakes", "无记录")
-    
+
     lesson_step = tutor_ctx.get("lesson_step", "EXPLAIN")
     step_directive = STEP_TEACHING_DIRECTIVES.get(lesson_step, "")
-    
-    # 2. Use the static tool (the model will pick up parameters from prompt)
-    model = get_heavy_model(temperature=0.2)
+
+    # 2. Dynamic model selection based on lesson step
+    model, temperature = get_model_for_step(lesson_step)
     tools = [search_knowledge_tree]
     model_with_tools = model.bind_tools(tools)
-    
+
+    model_name = getattr(model, "model_name", "unknown")
+    print(
+        f"--- [MODEL SELECTION] Step: {lesson_step}, Model: {model_name}, Temperature: {temperature} ---"
+    )
+
     # 3. Compile the Prompt
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", TUTOR_SYSTEM_PROMPT_BASE),
-        MessagesPlaceholder(variable_name="messages"),
-    ])
-    
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            ("system", TUTOR_SYSTEM_PROMPT_BASE),
+            MessagesPlaceholder(variable_name="messages"),
+        ]
+    )
+
     # Create the chain
     chain = prompt | model_with_tools
-    
+
     # 4. Invoke the Model
     invoke_args = {
         "step_directive": step_directive,
@@ -121,17 +150,17 @@ def tutor_node(state: AgentState):
         "node_content": tutor_ctx.get("node_content", "No specific content provided."),
         "example_content": tutor_ctx.get("example_content", "No example provided."),
         "health_score": health_score,
-        "historical_mistakes": history
+        "historical_mistakes": history,
     }
-    
+
     print("\n--- [DEBUG] TUTOR INVOKE ARGS ---")
     print(f"Lesson Step: {lesson_step}")
     print(f"System Prompt Directive:\n{step_directive}")
     print("---------------------------------\n")
 
-    response = chain.invoke(invoke_args)
-    
+    response = await chain.ainvoke(invoke_args)
+
     # Note: If `response.tool_calls` is present, the Supervisor/Graph needs to route to the tool executor node.
     # Otherwise, this is a final answer message that gets appended to the state.
-    
+
     return {"messages": [response]}

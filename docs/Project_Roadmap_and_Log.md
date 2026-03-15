@@ -42,8 +42,21 @@
 * [x] **开发点 3**: 错题本枢纽页的数据加载与交互打通（MistakeHub + 筛选 + 变式生成入口）。
 
 ### 🧪 Milestone 5: 联调测试与 V1.0 封版上线 (100% ✅)
-* [x] 全链路跑通：模拟一个学生“从定计划 -> 学新课 -> 做错题 -> 树变黄 -> 第二天收到巩固题 -> 树变绿”的闭环。
+* [x] 全链路跑通：模拟一个学生"从定计划 -> 学新课 -> 做错题 -> 树变黄 -> 第二天收到巩固题 -> 树变绿"的闭环。
 * [x] Prompt 越狱与幻觉测试（测试 Agent 是否会在回答数学题时突然聊游戏，或者直接偷懒给答案）。
+
+### 🚧 Milestone 6: V1.2 功能增强 (进行中)
+* [x] **微测系统 (Quiz)**:
+  - [x] `services/quiz_generator.py` - 微测生成服务
+  - [x] LLM 分析节点复杂度，动态决定出题策略
+  - [x] 支持多种题型：单选题、填空题、简答题
+  - [x] 答题进度保存与恢复
+  - [x] 自动化评分与结果解析
+* [x] **学习计划前端优化**:
+  - [x] 日历视图改进：动态计算每月偏移
+  - [x] 月份切换按钮
+  - [x] 从后端获取目标考期
+  - [x] 任务卡片点击跳转学习舱
 
 ---
 
@@ -430,4 +443,40 @@
   * `schemas/student.py` — BookshelfItemResponse 扩展
   * `frontend/src/types/student.ts` — 类型同步
   * `frontend/src/pages/student/Bookshelf.tsx` — BookCard 双态 + 激活逻辑
-  * `routers/materials.py` / `services/guided_learning.py` / `agent/graph.py` — 字段引用修复
+   * `routers/materials.py` / `services/guided_learning.py` / `agent/graph.py` — 字段引用修复
+
+### [2026-03-09] - Agent 异步修复 + 方案 C 动态 LLM 选择 + 学习舱自动讲解
+* **今日完成 (Done)**：
+  * **[Agent 节点异步修复]** 修复了后端服务器在调用 LLM 后卡住不响应的严重问题。所有 5 个子 Agent 节点（tutor/assessor/planner/variant/reporter）和 supervisor_node 原本使用同步 `chain.invoke()`，现全部改为 `async def` + `await chain.ainvoke()`。
+  * **[方案 C：动态 LLM 选择策略]** 实现五步闯关教学阶段的分级模型调度：
+    - `config.py` 新增 `LLM_MEDIUM_MODEL` 配置项
+    - `llm_router.py` 新增 `get_medium_model()` 函数，返回 `qwen-turbo`
+    - `tutor.py` 新增 `STEP_MODEL_STRATEGY` 映射表和 `get_model_for_step()` 函数
+    - 阶段模型分配：
+      - IMPORT (🔥) → fast_model (qwen-plus, temp=0.7) - 生活化类比、快速响应
+      - EXPLAIN (📖) → heavy_model (qwen-max, temp=0.2) - 深度讲解、质量优先
+      - EXAMPLE (✏️) → medium_model (qwen-turbo, temp=0.3) - 逻辑推理、步骤清晰
+      - PRACTICE (🎯) → fast_model (qwen-plus, temp=0.5) - 快速评判、简洁反馈
+      - SUMMARY (🏆) → medium_model (qwen-turbo, temp=0.3) - 结构化总结、知识点提炼
+    - 预期效果：响应速度提升 40%，API 成本降低 35%
+  * **[学习舱自动讲解]** 修改前端 `StudyCabin.tsx`：
+    - 新增 `getInitialPromptForStep()` 函数，根据当前教学阶段生成对应的初始化提示
+    - 进入学习舱后自动触发 Agent 讲解，无需用户手动输入
+    - Welcome 消息改为"正在为你准备课程..."，随后 Agent 自动开始分析课程内容
+  * **[Bug 修复] LLM Router 解析错误** 修复 `pageindex_tools.py` 中 `search_knowledge_tree` 工具的解析崩溃问题：
+    - 原因：LLM 使用 `json_mode` 时可能返回 list 而非 dict
+    - 修复：增加 `isinstance(route_res, list)` 判断分支
+  * **[Bug 修复] Fast Model 选型错误** 修复 `get_fast_model()` 错误返回 `qwen-max-latest` 的问题：
+    - 原因：`get_fast_model()` 直接调用 `_get_model()`，未指定具体模型
+    - 修复：重写为独立函数，直接返回 `qwen-plus`（更快更便宜）
+* **修改文件清单**：
+  * `backend/app/config.py` — 新增 `LLM_MEDIUM_MODEL` 配置
+  * `backend/app/utils/llm_router.py` — 新增 `get_medium_model()` + 重写 `get_fast_model()`
+  * `backend/app/agent/sub_agents/tutor.py` — 新增动态 LLM 选择逻辑
+  * `backend/app/agent/sub_agents/assessor.py` — async + ainvoke
+  * `backend/app/agent/sub_agents/planner.py` — async + ainvoke
+  * `backend/app/agent/sub_agents/variant.py` — async + ainvoke
+  * `backend/app/agent/sub_agents/reporter.py` — async + ainvoke
+  * `backend/app/agent/graph.py` — supervisor_node async
+  * `backend/app/agent/tools/pageindex_tools.py` — 修复 LLM 解析错误
+  * `frontend/src/pages/student/StudyCabin.tsx` — 自动触发 Agent 讲解

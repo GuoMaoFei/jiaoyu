@@ -61,7 +61,8 @@ src/stores/
 |:---|:---|:---|:---|
 | 统一书架 | `/bookshelf` | `GET /api/students/{id}/bookshelf`、`POST /api/students/activate-book` | 激活教材、设定主干 |
 | 今日任务 | `/today` | `GET /api/plans/{planId}/items?date=today` (待建) | 每日学习/复习/练习任务卡片 |
-| 学习计划 | `/plan/:materialId` | `GET /api/plans/` (待建)、`POST /api/chat/stream` (`intent: planner`) | 日历视图 + 任务列表 |
+| 学习计划 | `/plan/:materialId` | `GET /api/lessons/plans/{student_id}`、`POST /api/lessons/plans/generate` | 日历视图 + 任务列表 + 月份切换 |
+| 微测 | `/quiz/:nodeId` | `POST /api/quizzes/generate`、`POST /api/quizzes/submit`、`GET /api/quizzes/unfinished/{student_id}/{node_id}` | 智能微测、答题、结果 |
 | 课程大纲 | `/outline/:materialId` | `GET /api/materials/{id}/tree`、`GET /api/students/{id}/node-states` (待建) | 知识树列表视图 |
 | 入学诊断 | `/diagnostic/:materialId` | `POST /api/chat/stream` (`intent: assessor`) | 诊断考卷 + 进度条 + 结果 |
 | 学习舱 | `/cabin/:sessionId` | `POST /api/chat/stream` (SSE)、`POST /api/chat/` | Agent 对话、五步闯关 |
@@ -80,19 +81,27 @@ src/stores/
 | 消息中心 / 学情周报 | `/parent/reports` | `POST /api/reports/generate` |
 | 知识健康雷达 | `/parent/health/:materialId` | 同上 (报告中的章节健康度数据) |
 
-### 2.4 待建后端 API 清单 (前端依赖)
+### 2.4 已实现 API 清单 (更新至 V1.2)
 
-> 以下 API 为前端页面所必需但后端尚未实现的端点，需在 Milestone 4 中同步建设。
+> 以下 API 已完成后端实现。
 
 | API | 方法 | 用途 | 前端页面 |
 |:---|:---:|:---|:---|
 | `/api/auth/login` | POST | 学生/家长登录（JWT） | 登录页 |
 | `/api/auth/refresh` | POST | Token 静默续期 | 全局 Axios 拦截器 |
 | `/api/auth/bind-parent` | POST | 家长绑定学生 | 家长绑定页 |
-| `/api/students/{id}/node-states?material_id=` | GET | 某学生在指定教材下的全量节点状态 | 知识书林 / 课程大纲 |
-| `/api/students/{id}/mistakes?material_id=&status=` | GET | 学生错题全量列表（可按教材/状态筛选） | 错题枢纽 |
-| `/api/plans/` | GET | 获取学习计划列表 | 学习计划页 |
-| `/api/plans/{id}/items?date=` | GET | 获取某计划下的每日任务 | 今日任务页 |
+| `/api/students/{id}/node-states` | GET | 某学生在指定教材下的全量节点状态 | 知识书林 / 课程大纲 |
+| `/api/students/{id}/mistakes` | GET | 学生错题全量列表 | 错题枢纽 |
+| `/api/lessons/plans/{student_id}` | GET | 获取学习计划列表（含日期范围） | 学习计划页 |
+| `/api/lessons/plans/generate` | POST | 生成新的学习计划 | 学习计划页 |
+| `/api/lessons/plans/{student_id}` | DELETE | 清除学习计划 | 学习计划页 |
+| `/api/lessons/start` | POST | 开始/恢复闯关学习 | 学习舱 |
+| `/api/lessons/advance` | POST | 推进闯关步骤 | 学习舱 |
+| `/api/quizzes/generate` | POST | 生成微测题目 | 微测页面 |
+| `/api/quizzes/submit` | POST | 提交微测答案 | 微测页面 |
+| `/api/quizzes/unfinished/{student_id}/{node_id}` | GET | 获取未完成微测 | 微测页面 |
+| `/api/quizzes/{quiz_id}` | GET | 获取微测详情 | 微测结果页 |
+| `/api/quizzes/history/{student_id}/{node_id}` | GET | 获取历史微测记录 | 微测页面 |
 | `/api/tests/{paperId}/result` | GET | 获取考试成绩详情 | 成绩单页 |
 
 ---
@@ -101,7 +110,7 @@ src/stores/
 
 > **设计准则**：系统内绝对不允许"孤立的错题"或"漫无目的的提问"。所有行为必须显示隶属教材、章节和知识点。
 
-### 3.1 学习舱 (Study Cabin) — 全流式 SSE 架构
+### 3.1 学习舱 (Study Cabin) — 全流式 SSE 架构 + 自动讲解
 
 **技术方案**：通过 `POST /api/chat/stream` 使用 Server-Sent Events 连接。由于原生 `EventSource` API **仅支持 GET 请求**，前端必须使用 `@microsoft/fetch-event-source` 库（或手动 `fetch` + `ReadableStream`）来发送 POST 请求并监听以下四种事件：
 
@@ -111,6 +120,22 @@ src/stores/
 | 工具调用 | `tool` | `{"name": "search_knowledge_tree", ...}` | 底部加载条 + "正在检索教材..." |
 | 文本输出 | `token` | `{"content": "根据教材第28页..."}` | 逐字打字机效果 |
 | 完成/错误 | `done` / `error` | 最终内容 / 错误信息 | 出现操作按钮 |
+
+#### 3.1.1 自动讲解机制
+进入学习舱时，系统会根据当前教学阶段自动触发 Agent 讲解，无需用户手动输入：
+
+| 教学阶段 | 触发提示 |
+|:---|:---|
+| IMPORT | "请帮我分析这节课的核心内容，回顾一下我需要掌握的前置知识，并用生活化的方式引入今天的主题。" |
+| EXPLAIN | "请开始讲解这节课的重点知识，一步一步引导我理解。" |
+| EXAMPLE | "请给我展示一道典型例题，并引导我如何分析和解答。" |
+| PRACTICE | "请给我一些练习题，让我检验一下刚才学到的知识。" |
+| SUMMARY | "请帮我总结这节课的知识要点和考点。" |
+
+**UX 流程**：
+1. 用户进入学习舱 → 显示 "正在为你准备课程..." 欢迎消息
+2. 延迟 500ms 后 → 自动发送对应阶段的初始化提示
+3. Agent 开始流式输出 → 用户观看 Agent 讲解
 
 #### 请求体结构 (ChatMessageRequest)
 

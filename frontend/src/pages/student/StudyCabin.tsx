@@ -14,6 +14,23 @@ import LessonProgress from '../../components/chat/LessonProgress';
 import { LESSON_STEP_META, type LessonStep } from '../../types/lesson';
 import type { ChatMessage } from '../../types/chat';
 
+const getInitialPromptForStep = (step: LessonStep | null): string => {
+    switch (step) {
+        case 'IMPORT':
+            return '请帮我分析这节课的核心内容，回顾一下我需要掌握的前置知识，并用生活化的方式引入今天的主题。';
+        case 'EXPLAIN':
+            return '请开始讲解这节课的重点知识，一步一步引导我理解。';
+        case 'EXAMPLE':
+            return '请给我展示一道典型例题，并引导我如何分析和解答。';
+        case 'PRACTICE':
+            return '请给我一些练习题，让我检验一下刚才学到的知识。';
+        case 'SUMMARY':
+            return '请帮我总结这节课的知识要点和考点。';
+        default:
+            return '请帮我开始学习这个知识点。';
+    }
+};
+
 const StudyCabin: React.FC = () => {
     const { sessionId } = useParams<{ sessionId: string }>();
     const [searchParams] = useSearchParams();
@@ -41,6 +58,8 @@ const StudyCabin: React.FC = () => {
 
     const welcomeAddedRef = useRef(false);
     const lastSessionRef = useRef<string | undefined>(undefined);
+    const autoTriggeredRef = useRef(false);
+    const handleSendRef = useRef<((text: string) => Promise<void>) | null>(null);
 
     // 初始化 session
     useEffect(() => {
@@ -49,6 +68,7 @@ const StudyCabin: React.FC = () => {
             lastSessionRef.current = sessionId;
             clearMessages();
             welcomeAddedRef.current = false;
+            autoTriggeredRef.current = false;
         }
 
         if (sessionId) {
@@ -57,7 +77,7 @@ const StudyCabin: React.FC = () => {
         // 如果首次进入空会话，发一条欢迎消息
         if (!welcomeAddedRef.current) {
             welcomeAddedRef.current = true;
-            let welcomeContent = '你好！👋 我是你的 AI 伴读神仙。\n\n选择一个知识点，我会用苏格拉底式引导帮你理解它。我们开始吧！';
+            let welcomeContent = '你好！👋 我是你的 AI 伴读神仙。\n\n正在为你准备课程...';
             let agentId: ChatMessage['agentId'] = 'tutor';
             
             if (intent === 'variant') {
@@ -77,6 +97,20 @@ const StudyCabin: React.FC = () => {
             stopStream();
         };
     }, [sessionId, intent]);
+
+    // 自动触发 Agent 开始讲解（当 currentStep 可用时）
+    useEffect(() => {
+        if (currentStep && intent === 'tutor' && welcomeAddedRef.current && !autoTriggeredRef.current) {
+            const sendFn = handleSendRef.current;
+            if (sendFn) {
+                autoTriggeredRef.current = true;
+                setTimeout(() => {
+                    const initialPrompt = getInitialPromptForStep(currentStep);
+                    sendFn(initialPrompt);
+                }, 500);
+            }
+        }
+    }, [currentStep, intent]);
 
     // 自动滚动到底部
     useEffect(() => {
@@ -165,6 +199,11 @@ const StudyCabin: React.FC = () => {
         },
         [user?.id, sessionId, startStream, addMessage, appendStreamToLastMessage, setCurrentAgent, setSessionId]
     );
+
+    // Store handleSend in ref for use in useEffect
+    useEffect(() => {
+        handleSendRef.current = handleSend;
+    }, [handleSend]);
 
     return (
         <div className="flex flex-col h-full bg-white">

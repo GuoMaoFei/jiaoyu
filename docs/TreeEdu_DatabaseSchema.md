@@ -326,7 +326,47 @@ erDiagram
     }
 ```
 
-### 6.2. 错题定位与分解流程 (The "Diagnosing" Flow)
+## 6. 微测系统 (Quiz Domain)
+
+为了支撑日常知识点微测需求，系统设计了轻量级的微测模块。每个微测绑定到特定的知识节点，支持智能出题、答题进度保存、自动化评分。
+
+```mermaid
+erDiagram
+    KNOWLEDGE_NODE ||--o{ NODE_QUIZ : generates
+    STUDENT ||--o{ NODE_QUIZ : takes
+
+    NODE_QUIZ {
+        varchar id PK
+        varchar student_id FK
+        varchar node_id FK "对应的知识节点"
+        varchar node_title "知识点标题"
+        int is_key_node "是否为重点章节: 0-普通, 1-重点"
+        
+        int question_count "题目数量"
+        int time_limit_min "时间限制(分钟)"
+        varchar difficulty_level "难度: easy, medium, hard"
+        
+        text questions_json "题目快照(JSON，含题干、选项、答案等)"
+        
+        int time_used_sec "实际用时(秒)"
+        int score "得分"
+        float accuracy_pct "正确率"
+        
+        text answers_json "学生答案快照(JSON)"
+        text results_json "批改结果(JSON，含解题思路)"
+        
+        datetime created_at
+        datetime submitted_at
+    }
+```
+
+**设计解读：**
+- **题目快照隔离 (`questions_json`)**：生成试卷时将题目完整快照存入，防止源题库修改影响历史记录
+- **进度保存 (`answers_json`)**：支持答题中断恢复，学生可返回继续作答
+- **结果详情 (`results_json`)**：包含每道题的批改结果和详细解题思路，用于学习复盘
+- **与学习计划联动**：微测结果自动更新 `STUDENT_NODE_STATE.health_score`，错题自动加入复习队列
+
+### 6.1. 错题定位与分解流程 (The "Diagnosing" Flow)
 当学生在系统中做错一道题，或上传一张错题照片时：
 
 1. **多模态解析 (OCR + Vision LLM)**：将学生错题图片转为文本公式（放入 `raw_ocr_content`）。
@@ -344,4 +384,11 @@ erDiagram
 
 ## 下一步行动方案 (Next Actionable Steps)
 
-至此，用于支撑智树（TreeEdu）产品从**计划 -> 练习 -> 批改 -> 错题沉淀 -> 再次排期** 数据闭环的所有底层 ER 实体模型均已确立。接下来进入工程架构阶段。
+至此，用于支撑智树（TreeEdu）产品从**计划 -> 练习 -> 批改 -> 错题沉淀 -> 再次排期** 数据闭环的所有底层 ER 实体模型均已确立。V1.2 版本已实现：
+
+- [x] 微测系统 (NodeQuiz)
+- [x] 学习计划系统 (PlanItem)
+- [x] 五步导学 (LessonProgress)
+- [x] 艾宾浩斯复习 (StudentMistake)
+
+接下来进入工程架构阶段。

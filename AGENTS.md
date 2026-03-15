@@ -213,7 +213,13 @@ jiaoyu_agent/
 │   │   ├── routers/        # FastAPI route handlers
 │   │   ├── schemas/        # Pydantic request/response models
 │   │   ├── services/       # Business logic layer
-│   │   ├── utils/          # Utility functions
+│   │   │   ├── quiz_generator.py    # 微测生成服务
+│   │   │   ├── guided_learning.py   # 五步导学服务
+│   │   │   └── adaptive_review.py   # 自适应复习服务
+│   │   ├── utils/         # Utility functions
+│   │   │   ├── llm_router.py        # LLM 模型路由
+│   │   │   ├── vision_ocr.py        # OCR 视觉识别
+│   │   │   └── vlm_catalog.py       # 目录提取
 │   │   ├── config.py       # Settings and configuration
 │   │   ├── database.py     # DB connection and session
 │   │   └── main.py         # FastAPI app entry point
@@ -223,12 +229,22 @@ jiaoyu_agent/
 ├── frontend/
 │   ├── src/
 │   │   ├── api/            # API client functions
+│   │   │   ├── auth.ts     # 认证相关 API
+│   │   │   ├── lessons.ts  # 课程/学习计划 API
+│   │   │   ├── quiz.ts     # 微测 API
+│   │   │   └── client.ts   # Axios 客户端
 │   │   ├── components/     # Reusable React components
 │   │   ├── hooks/          # Custom React hooks
 │   │   ├── pages/          # Page-level components
+│   │   │   ├── student/    # 学生端页面
+│   │   │   │   ├── StudyPlan.tsx    # 学习计划页面
+│   │   │   │   ├── NodeQuiz.tsx     # 微测页面
+│   │   │   │   ├── StudyCabin.tsx   # 学习舱页面
+│   │   │   │   └── ...
+│   │   │   └── parent/     # 家长端页面
 │   │   ├── stores/         # Zustand state stores
-│   │   ├── styles/         # Global styles
 │   │   ├── types/          # TypeScript type definitions
+│   │   │   └── lesson.ts   # 课程相关类型定义
 │   │   ├── App.tsx         # Root component
 │   │   └── main.tsx        # Entry point
 │   ├── package.json
