@@ -26,6 +26,8 @@ const getInitialPromptForStep = (step: LessonStep | null): string => {
             return '请给我一些练习题，让我检验一下刚才学到的知识。';
         case 'SUMMARY':
             return '请帮我总结这节课的知识要点和考点。';
+        case 'COMPLETED':
+            return '我已经完成了本节课程，请给我总结一下学习要点。';
         default:
             return '请帮我开始学习这个知识点。';
     }
@@ -98,9 +100,9 @@ const StudyCabin: React.FC = () => {
         };
     }, [sessionId, intent]);
 
-    // 自动触发 Agent 开始讲解（当 currentStep 可用时）
+    // 自动触发 Agent 开始讲解（当 currentStep 可用且未完成时）
     useEffect(() => {
-        if (currentStep && intent === 'tutor' && welcomeAddedRef.current && !autoTriggeredRef.current) {
+        if (currentStep && currentStep !== 'COMPLETED' && intent === 'tutor' && welcomeAddedRef.current && !autoTriggeredRef.current) {
             const sendFn = handleSendRef.current;
             if (sendFn) {
                 autoTriggeredRef.current = true;

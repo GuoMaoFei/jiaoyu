@@ -122,7 +122,7 @@ const Outline: React.FC = () => {
         try {
             const res: any = await startLesson(user.id, nodeId);
             setLesson(res);
-            navigate(`/cabin/${res.session_id}`);
+            navigate(`/cabin/${res.lesson_id}`);
         } catch (err: any) {
             message.error('启动学习舱失败: ' + (err.message || '未知错误'));
         }

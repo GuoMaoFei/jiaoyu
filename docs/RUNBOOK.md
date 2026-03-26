@@ -83,3 +83,34 @@ npm run dev
    * **知识书林 ECharts：** 查看知识树彩色（绿/黄/红锁）分布情况。
    * **学习计划与家长周报：** 点击左侧导航，观察 LangGraph 是否在后台自动运算并产出结果。
    * **错题诊断：** 参与摸底诊断，故意做错几道题，然后查看错题本中是否真实生成了复习记录及其变式。
+
+---
+
+## 单元测试 (避免浪费 Token)
+
+### pageindex 模块测试
+
+修改 `pageindex` 相关代码后（尤其是 `generate_toc_continue`、`generate_toc_init`、`extract_json` 等），应先运行单元测试验证逻辑正确性，避免真实 API 调用浪费 token。
+
+```bash
+cd backend
+python -m pytest tests/test_page_index.py -v
+```
+
+测试文件位于 `backend/tests/test_page_index.py`，覆盖以下场景：
+
+| 测试用例 | 验证内容 |
+|---------|---------|
+| `test_valid_json` | 完整 JSON 正确解析 |
+| `test_json_with_code_block` | 带 markdown 代码块的 JSON 正确提取 |
+| `test_incomplete_json_returns_empty_dict` | 无效 JSON 返回 `{}` 而非抛异常 |
+| `test_finish_reason_finished_valid_json` | API 返回 `finished` 且 JSON 完整时直接返回 |
+| `test_api_error_raises` | API 返回 Error 时正确抛异常 |
+| `test_unexpected_finish_reason_raises` | 非预期 finish_reason 时抛异常 |
+| `test_max_retries_exceeded_raises` | 重试 5 次后仍失败时抛异常 |
+
+**关键修复说明：**
+
+- `extract_json` 失败时返回 `{}` 而非抛 `JSONDecodeError`，因此 `generate_toc_continue` 的重试逻辑需要检查返回值是否为非空 list/dict，不能仅依赖异常捕获。
+- 通义千问 API 的 `max_tokens` 上限为 **8192**，设置过大会导致 `400 Bad Request`。
+

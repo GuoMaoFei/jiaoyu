@@ -3,8 +3,9 @@ Lesson Router - Handles guided learning session lifecycle.
 """
 
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -20,6 +21,7 @@ from app.schemas.lesson import (
     PlanItemResponse,
     PlanGenerateRequest,
 )
+from app.models.material import Material
 
 logger = logging.getLogger(__name__)
 
@@ -47,14 +49,23 @@ async def advance_step(request: LessonAdvanceRequest):
 
 
 @router.get("/plans/{student_id}", response_model=PlanListResponse)
-async def get_study_plans(student_id: str, db: AsyncSession = Depends(get_db)):
-    """Get the student's study plan items."""
+async def get_study_plans(
+    student_id: str,
+    db: AsyncSession = Depends(get_db),
+    material_id: Optional[str] = Query(None, description="Filter by material ID"),
+):
+    """Get the student's study plan items, optionally filtered by material."""
     stmt = (
-        select(PlanItem, KnowledgeNode.title)
+        select(PlanItem, KnowledgeNode.title, Material.subject)
         .outerjoin(KnowledgeNode, PlanItem.node_id == KnowledgeNode.id)
+        .outerjoin(Material, PlanItem.material_id == Material.id)
         .where(PlanItem.student_id == student_id)
-        .order_by(PlanItem.scheduled_date.asc())
     )
+
+    if material_id:
+        stmt = stmt.where(PlanItem.material_id == material_id)
+
+    stmt = stmt.order_by(PlanItem.scheduled_date.asc())
 
     result = await db.execute(stmt)
     rows = result.all()
@@ -63,7 +74,7 @@ async def get_study_plans(student_id: str, db: AsyncSession = Depends(get_db)):
     start_date = None
     end_date = None
 
-    for plan, title in rows:
+    for plan, title, subject in rows:
         ftype = "LEARN_NEW"
         if plan.task_type.value == "REVIEW":
             ftype = "REVIEW_VARIANT"
@@ -78,6 +89,8 @@ async def get_study_plans(student_id: str, db: AsyncSession = Depends(get_db)):
             PlanItemResponse(
                 id=plan.id,
                 node_id=plan.node_id,
+                material_id=plan.material_id,
+                subject=subject,
                 type=ftype,
                 title=f"{'学习' if ftype == 'LEARN_NEW' else '复习'}：{node_title}",
                 completed=plan.status.value == "COMPLETED",
@@ -133,10 +146,23 @@ async def generate_study_plan(request: PlanGenerateRequest):
 
 
 @router.delete("/plans/{student_id}")
-async def clear_study_plans(student_id: str, db: AsyncSession = Depends(get_db)):
-    """Clear all study plans for a student."""
+async def clear_study_plans(
+    student_id: str,
+    db: AsyncSession = Depends(get_db),
+    material_id: Optional[str] = Query(
+        None, description="Delete plans for specific material only"
+    ),
+):
+    """Clear study plans for a student. If material_id provided, only delete that material's plans."""
     from sqlalchemy import delete
 
-    await db.execute(delete(PlanItem).where(PlanItem.student_id == student_id))
+    stmt = delete(PlanItem).where(PlanItem.student_id == student_id)
+    if material_id:
+        stmt = stmt.where(PlanItem.material_id == material_id)
+
+    await db.execute(stmt)
     await db.commit()
+
+    if material_id:
+        return {"status": "ok", "message": f"教材 {material_id} 的学习计划已清除"}
     return {"status": "ok", "message": "学习计划已清除"}

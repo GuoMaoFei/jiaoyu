@@ -1,8 +1,13 @@
 import logging
+from pathlib import Path
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
+from dotenv import load_dotenv
+
+# Load .env into os.environ before any other imports that use os.getenv
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 from app.config import get_settings
 from app.database import get_db

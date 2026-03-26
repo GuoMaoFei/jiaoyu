@@ -51,6 +51,8 @@ class PlanItemResponse(BaseModel):
 
     id: str
     node_id: str
+    material_id: Optional[str] = None
+    subject: Optional[str] = None
     type: str  # 'LEARN_NEW' or 'DO_QUIZ' or 'REVIEW_VARIANT'
     title: str
     completed: bool

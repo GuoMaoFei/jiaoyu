@@ -4,7 +4,7 @@
 
 智树 (TreeEdu) Agent 的后端旨在构建一个**严格遵循教纲边界**、**提供 24 小时苏格拉底式启发**的教育智能体平台。
 
-> **当前状态**：后端全部完成 ✅。五大 Agent + 10 个 LangGraph 工具 + 19 个 FastAPI 端点 + SSE 流式对话 + OCR 视觉 + 艾宾浩斯复习引擎。**V1.1 重构**：完成 KnowledgeNode/KnowledgeContent 骨肉分离 + 推理型 RAG 四步检索链 + 统一书架改造。**V1.2 优化**：实现方案 C 动态 LLM 选择（根据五步教学阶段分级调度模型）+ 学习舱自动讲解。
+> **当前状态**：后端全部完成 ✅。五大 Agent + 10 个 LangGraph 工具 + 19 个 FastAPI 端点 + SSE 流式对话 + OCR 视觉 + 艾宾浩斯复习引擎。**V1.1 重构**：完成 KnowledgeNode/KnowledgeContent 骨肉分离 + 推理型 RAG 四步检索链 + 统一书架改造。**V1.2 优化**：实现方案 C 动态 LLM 选择（根据五步教学阶段分级调度模型）+ 学习舱自动讲解。**V1.3 学习计划重构**：多教材支持 + 按日期聚合展示 + 计划完成状态同步修复。**V1.4 OCR 缓存优化**：EasyOCR 集成 + 本地缓存机制，失败后可从缓存恢复。
 
 ### 1.1 核心技术栈与架构模式
 - **Web 框架**: FastAPI - 提供全异步的基础架构与 Swagger API 支持。
@@ -121,9 +121,24 @@
    - 动态生成题目数量、题型分布、时间限制
    - 支持单选题、填空题、简答题等多种题型
    - 答题进度保存与恢复
-3. **自动学情观察员 (Reporter Agent)**：**深度联动 PageIndex**: Agent 会按需扫表，根据 PageIndex 教材树的章节聚类结构（例如发现 Chapter 1 下属的 5 个 Concept Node 均变红），自动总结出结构化的家长 Markdown 报告（"第一章代数基础极不牢固，集中在解方程节点"）。
+3. **自动学情观察员 (Reporter Agent)**：**深度联动 PageIndex**: Agent 会按扫表，根据 PageIndex 教材树的章节聚类结构（例如发现 Chapter 1 下属的 5 个 Concept Node 均变红），自动总结出结构化的家长 Markdown 报告（"第一章代数基础极不牢固，集中在解方程节点"）。
 4. **艾宾浩斯打捞**：实现 `services/adaptive_review.py` 定时触发器，强行注入旧错题。
 5. **并发抢占处理**：在核心接口中补充并发压测，必要时升级为悲观锁。
+
+### Sprint 6： 学习计划多教材支持 (V1.3) ✅ 已完成
+支持学生在同一系统中学习多门课程，实现按日期聚合显示不同教材的任务。
+1. **数据库扩展**：`PlanItem` 新增 `material_id` 字段，直接关联教材，支持按教材筛选和删除。
+2. **API 增强**：
+   - `GET /plans/{student_id}` 支持 `material_id` 可选筛选参数
+   - `DELETE /plans/{student_id}` 支持删除单个教材的计划
+3. **Planner Agent 更新**：`create_study_plan` 工具增加 `material_id` 参数，创建计划时自动填充教材关联。
+4. **前端 UI 改造**：
+   - 学习计划页面按日期聚合显示任务
+   - 不同教材使用不同颜色区分
+   - 增加教材筛选下拉框
+   - 增加删除单个教材计划功能
+   - 空状态引导生成计划提示
+5. **Bug 修复**：五步学习完成后同步更新 `PlanItem.status` 为 `COMPLETED`
 
 ---
 
@@ -204,3 +219,49 @@ backend/
 **原有痛点**：长期运营如果依赖 PageIndex 外部 API 会存在大基座极大的教育数据隐私风险，且计费高昂。
 **当前解决 (V1.0 末期已提前攻克)**：我们已经完全卸载了官方闭源 SDK，将 PageIndex 的核心开源算法库克隆并深层集成至了本地 `backend/pageindex` 模块下。现在的后端在建树和抽取阶段，将**直接拉起本地线程池，驱动配置好的阿里云（Qwen-Max）通过内部算法对教材进行混合 MCTS 构建**。
 **里程碑意义**：系统彻底摆脱了强外部供应商依赖，实现了 **数据 100% 本地脱网流转 + 模型接口自主切换 + API 费用断崖式下跌**。这标志着智树 Agent 具备了被私有化部署至全封闭校园内网或培训机构机房的终极底座技术实力。
+
+---
+
+## 6. 学习计划多教材架构 (V1.2 重构)
+
+为了支持学生同时学习多门课程（数学、英语等），V1.2 版本对学习计划系统进行了深度重构。
+
+### 6.1 架构变更
+| 维度 | 变更前 | 变更后 |
+|------|--------|--------|
+| 数据模型 | `PlanItem` 无 `material_id` | `PlanItem` 增加 `material_id` 字段 |
+| 计划生成 | 只支持单教材 | 支持多教材并行学习 |
+| 前端展示 | 混合显示所有任务 | 按日期聚合，教材颜色区分 |
+| 筛选功能 | 无 | 支持按 `material_id` 筛选 |
+| 删除功能 | 只能清除全部计划 | 支持删除单个教材的计划 |
+
+### 6.2 API 变更
+- `GET /api/lessons/plans/{student_id}` 增加 `material_id` 查询参数
+- `DELETE /api/lessons/plans/{student_id}` 增加 `material_id` 查询参数
+- `POST /api/lessons/plans/generate` 的 `create_study_plan` 工具增加 `material_id` 参数
+
+### 6.3 Bug 修复
+- **计划完成状态同步**：修复了五步学习完成后 `PlanItem.status` 不更新的问题。现在 `guided_learning.py` 在学习完成时会同步更新 `PlanItem.status = COMpleted` 和 `completed_at` 时间戳。
+
+### 6.4 章节排序逻辑修复 (V1.3.x)
+- **问题诊断**：原排序按 `level, seq_num` 全局排序，忽略章节层级关系。导致"我爱学语文"（父章节"我上学了"）被排在第24位而非第2位。
+- **修复方案**：
+  - `get_material_node_list` 只返回 Level 2 节点（实际课文），排除章节标题（Level 1）
+  - 排序改为：先按父章节的 seq_num，再按节点自身 seq_num
+  - 使用 SQLAlchemy `LEFT JOIN` + `COALESCE` 实现章节顺序
+- **技术实现**：
+  ```python
+  parent = aliased(KnowledgeNode)
+  query = (
+      select(KnowledgeNode, parent.seq_num.label("parent_seq_num"))
+      .outerjoin(parent, KnowledgeNode.parent_id == parent.id)
+      .where(...)
+      .order_by(
+          func.coalesce(parent.seq_num, 0).asc(),
+          KnowledgeNode.seq_num.asc(),
+      )
+  )
+  ```
+- **验证结果**：
+  - "我爱学语文" 现在排在第2位（紧随"我是小学生"之后）
+  - 节点按章节顺序正确排列

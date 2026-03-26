@@ -1,4 +1,5 @@
 import logging
+import traceback
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
@@ -50,7 +51,7 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         try:
             yield session
         except Exception as e:
-            logger.error(f"Database session error: {e}")
+            logger.error(f"Database session error: {e}\n{traceback.format_exc()}")
             await session.rollback()
             raise
         finally:

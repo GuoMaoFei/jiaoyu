@@ -38,6 +38,8 @@ export type TaskType = 'LEARN_NEW' | 'DO_QUIZ' | 'REVIEW_VARIANT';
 export interface PlanItem {
     id: string;
     node_id: string;
+    material_id?: string;
+    subject?: string;
     type: TaskType;
     title: string;
     completed: boolean;

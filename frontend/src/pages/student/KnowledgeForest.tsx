@@ -79,7 +79,7 @@ const KnowledgeForest: React.FC = () => {
             try {
                 const res: any = await startLesson(user.id, nodeId);
                 setLesson(res);
-                navigate(`/cabin/${res.session_id}?intent=tutor`);
+                navigate(`/cabin/${res.lesson_id}?intent=tutor`);
             } catch {
                 navigate(`/cabin/${materialId || 'demo'}-${nodeId}?intent=tutor`);
             }

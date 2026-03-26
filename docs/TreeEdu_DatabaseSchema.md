@@ -238,17 +238,20 @@ erDiagram
 
     PLAN_ITEM {
         varchar id PK
-        varchar plan_id FK
+        varchar student_id FK
+        varchar material_id FK "关联到具体的教材"
         varchar node_id FK "指向该书本今天该学的那个节点"
         varchar task_type "任务语义: LEARN_NEW(学新课), DO_QUIZ(小测), REVIEW_VARIANT(错题变式)"
         date schedule_date "被 Agent 分配到的具体日期"
         varchar status "PENDING, IN_PROGRESS, COMPLETED, DELAYED"
+        datetime completed_at "完成时间"
     }
 ```
 
 **设计解读：**
-* **组卷硬锁 (`is_unlocked`)**：Agent 在扫描知识库薄弱项自动组卷时，此标志可以完美拦截该生“还没学过的节点”，防止打击信心引发负面体验。
+* **组卷硬锁 (`is_unlocked`)**：Agent 在扫描知识库薄弱项自动组卷时，此标志可以完美拦截该生"还没学过的节点"，防止打击信心引发负面体验。
 * **清晰可渲染 (`task_type`)**：计划卡片带有特定的指令类别，有助于前端进行特定卡片微件的展示。
+* **多教材支持 (`material_id`)**：V1.2 重构后，每个 `PLAN_ITEM` 直接关联 `material_id`，支持学生在同一系统中学习多门课程（数学、英语等），前端按日期聚合显示不同教材的任务，用颜色区分。
 ## 5. 测试与答题记录领域 (Testing & Assessment Domain)
 
 为了支撑 PRD 中“千人千卷动态生成”与“日常习题演练”的需求，我们必须设计一套能够长期追踪学生具体答题行为的结构。这也是系统形成闭环（练习 -> 成绩 -> 错题 -> 节点变黄 -> 复习计划）的源头。

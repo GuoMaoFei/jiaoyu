@@ -7,8 +7,8 @@
 
 ## 📅 第零部分：当前整体项目进度池 (Current Status)
 
-**✅ 项目当前位置**：**Milestone 2 + Milestone 3 全部完成 ✅**。五大 Agent（Tutor/Assessor/Planner/Variant/Reporter）全部落地，FastAPI 19 个端点，含 SSE/OCR/艘宾浩斯复习。**Milestone 4 Sprint 3 完成 ✅**，学生端 9 个页面全部交付。**Milestone 5 V1.0 封版 ✅**。
-**🔧 当前工作**：已完成 PageIndex 架构深度重构（骨肉分离 + 推理型 RAG 四步法 + 统一书架），当前处于全链路回归验证阶段。
+**✅ 项目当前位置**：**Milestone 2 + Milestone 3 全部完成 ✅**。五大 Agent（Tutor/Assessor/Planner/Variant/Reporter）全部落地，FastAPI 19 个端点，含 SSE/OCR/艘宾浩斯复习。**Milestone 4 Sprint 3 完成 ✅**，学生端 9 个页面全部交付。**Milestone 5 V1.0 封版 ✅**。**Milestone 7 V1.3 学习计划多教材支持完成 ✅**。
+**🔧 当前工作**：已完成 PageIndex 架构深度重构（骨肉分离 + 推理型 RAG 四步法 + 统一书架）+ 学习计划多教材重构（按日期聚合 + 颜色区分 + 筛选删除），当前处于全链路回归验证阶段。
 **🎯 下一步核心任务**：端到端验收测试 + 前端联调 + V2.0 需求讨论。
 
 ---
@@ -57,6 +57,41 @@
   - [x] 月份切换按钮
   - [x] 从后端获取目标考期
   - [x] 任务卡片点击跳转学习舱
+
+### 🚧 Milestone 7: V1.3 学习计划多教材支持 (已完成 ✅)
+* [x] **数据模型扩展**:
+  - [x] `PlanItem` 新增 `material_id` 字段
+  - [x] 数据库迁移脚本
+* [x] **API 增强**:
+  - [x] GET `/plans/{student_id}` 支持按 `material_id` 筛选
+  - [x] DELETE `/plans/{student_id}` 支持删除单个教材计划
+* [x] **Planner Agent 更新**:
+  - [x] `create_study_plan` 工具增加 `material_id` 参数
+  - [x] Prompt 更新确保 Agent 正确传入教材 ID
+* [x] **Bug 修复**:
+  - [x] 五步学习完成后同步更新 `PlanItem.status`
+* [x] **前端 UI 改造**:
+  - [x] 日历视图按日期聚合显示多教材任务
+  - [x] 不同教材使用不同颜色区分
+  - [x] 教材筛选下拉框
+  - [x] 删除单个教材计划功能
+  - [x] 空状态引导生成计划提示
+
+### 🚧 Milestone 7.x: 学习计划排序与章节逻辑修复 (已完成 ✅)
+* [x] **问题诊断**:
+  - [x] 原排序按 `level, seq_num` 全局排序，忽略章节层级
+  - [x] "我爱学语文" 等节点被排在第24位而非第2位
+* [x] **修复方案**:
+  - [x] `get_material_node_list` 只返回 Level 2 节点（实际课文）
+  - [x] 排序改为：先按父章节 seq_num，再按自身 seq_num
+  - [x] 使用 `LEFT JOIN` + `COALESCE` 实现章节顺序
+* [x] **验证结果**:
+  - [x] "我爱学语文" 现在排在第2位（紧随"我是小学生"之后）
+  - [x] 节点按章节顺序正确排列
+
+### 物料上传限制调整
+* [x] PDF 文件最大限制从 50MB 增加到 200MB
+* [x] 配置文件: `backend/app/routers/materials.py` 中的 `MAX_FILE_SIZE`
 
 ---
 
@@ -479,4 +514,31 @@
   * `backend/app/agent/sub_agents/reporter.py` — async + ainvoke
   * `backend/app/agent/graph.py` — supervisor_node async
   * `backend/app/agent/tools/pageindex_tools.py` — 修复 LLM 解析错误
-  * `frontend/src/pages/student/StudyCabin.tsx` — 自动触发 Agent 讲解
+   * `frontend/src/pages/student/StudyCabin.tsx` — 自动触发 Agent 讲解
+
+### [2026-03-15] - 学习计划多教材重构
+* **今日完成 (Done)**：
+  * **[Bug 修复] 计划完成状态同步**：修复了五步学习完成后 `PlanItem.status` 不更新的问题。现在完成学习后会自动将计划状态更新为 `COMPLETED` 并记录完成时间。
+  * **[数据模型] 多教材支持**：`PlanItem` 新增 `material_id` 字段，支持同一学生学习多门课程。每个计划项明确关联到具体教材，便于按课程筛选和管理。
+  * **[API 增强] 筛选与删除**：
+    - `GET /plans/{student_id}` 支持通过 `material_id` 查询参数筛选特定教材的计划
+    - `DELETE /plans/{student_id}` 支持通过 `material_id` 参数仅删除特定教材的计划
+  * **[Planner Agent 增强]**：`create_study_plan` 工具新增 `material_id` 参数，确保每个计划项都有明确的教材归属。
+  * **[前端重构] 多教材展示**：
+    - 日历视图按日期聚合显示所有教材任务
+    - 不同教材用不同颜色区分（6种颜色循环）
+    - 新增教材下拉筛选器
+    - 新增"管理计划"下拉菜单，支持删除单个教材计划
+    - 任务卡片显示所属教材标签
+    - 空状态引导用户生成计划
+* **修改文件清单**：
+  * `backend/app/services/guided_learning.py` — 学习完成同步更新 PlanItem
+  * `backend/app/models/lesson.py` — PlanItem 增加 material_id 字段
+  * `backend/app/schemas/lesson.py` — PlanItemResponse 增加 material_id/subject
+  * `backend/app/routers/lesson.py` — GET/DELETE 支持 material_id 筛选
+  * `backend/app/agent/tools/planner_tools.py` — create_study_plan 增加 material_id
+  * `backend/app/agent/sub_agents/planner.py` — Prompt 更新
+  * `backend/alembic/versions/add_material_id_to_plan_items.py` — 数据库迁移
+  * `frontend/src/types/lesson.ts` — PlanItem 增加字段
+  * `frontend/src/api/lessons.ts` — API 支持筛选参数
+  * `frontend/src/pages/student/StudyPlan.tsx` — 多教材 UI 改造

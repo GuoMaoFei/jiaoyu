@@ -8,7 +8,7 @@ export const getStudentProfile = (studentId: string) =>
 
 /** 获取书架 */
 export const getBookshelf = (studentId: string) =>
-    apiClient.get<BookshelfResponse>(`/students/${studentId}/bookshelf`);
+    apiClient.get<BookshelfResponse, BookshelfResponse>(`/students/${studentId}/bookshelf`);
 
 /** 激活教材（加入书架） */
 export const activateBook = (studentId: string, materialId: string) =>

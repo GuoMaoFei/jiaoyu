@@ -1,4 +1,5 @@
 import secrets
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
@@ -19,15 +20,17 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     DEEPSEEK_API_KEY: str = ""
     ALIYUN_API_KEY: str = ""
+    OPENROUTER_API_KEY: str = ""
+    MINIMAX_API_KEY: str = ""
+
+    # Router Settings
+    LLM_FAST_MODEL: str = "openrouter"
+    LLM_MEDIUM_MODEL: str = "openrouter"
+    LLM_HEAVY_MODEL: str = "openrouter"
+    LLM_VISION_MODEL: str = "openrouter"
 
     # PageIndex
     PAGEINDEX_API_KEY: str = ""
-
-    # Router Settings
-    LLM_FAST_MODEL: str = "aliyun"
-    LLM_MEDIUM_MODEL: str = "aliyun"
-    LLM_HEAVY_MODEL: str = "aliyun"
-    LLM_VISION_MODEL: str = "aliyun"
 
     # JWT Settings - Must be set in production
     JWT_SECRET_KEY: str = ""
@@ -39,7 +42,9 @@ class Settings(BaseSettings):
 
     # Pydantic core settings lookup
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=Path(__file__).parent.parent / ".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     def get_jwt_secret(self) -> str:

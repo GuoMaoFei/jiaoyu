@@ -49,6 +49,32 @@ def _get_model(provider_name: str, temperature: float = 0.0) -> BaseChatModel:
             timeout=120.0,
             max_retries=3,
         )
+    elif provider == "openrouter":
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            api_key=settings.OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
+            model="google/gemma-3-12b-it:free",
+            temperature=temperature,
+            timeout=120.0,
+            max_retries=3,
+            extra_headers={
+                "HTTP-Referer": "https://treeedu.ai",
+                "X-Title": "TreeEdu Agent",
+            },
+        )
+    elif provider == "minimax":
+        from langchain_anthropic import ChatAnthropic
+
+        return ChatAnthropic(
+            anthropic_api_key=settings.MINIMAX_API_KEY,
+            model="MiniMax-M2.7",
+            temperature=temperature,
+            timeout=120.0,
+            max_retries=3,
+            anthropic_api_url="https://api.minimaxi.com",
+        )
     else:
         raise ValueError(f"Unknown LLM provider configured: {provider}")
 
@@ -101,6 +127,32 @@ def get_fast_model(temperature: float = 0.0) -> BaseChatModel:
             timeout=60.0,
             max_retries=3,
         )
+    elif provider == "openrouter":
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            api_key=settings.OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
+            model="qwen/qwen3-4b:free",
+            temperature=temperature,
+            timeout=60.0,
+            max_retries=3,
+            extra_headers={
+                "HTTP-Referer": "https://treeedu.ai",
+                "X-Title": "TreeEdu Agent",
+            },
+        )
+    elif provider == "minimax":
+        from langchain_anthropic import ChatAnthropic
+
+        return ChatAnthropic(
+            anthropic_api_key=settings.MINIMAX_API_KEY,
+            model="MiniMax-M2.5",
+            temperature=temperature,
+            timeout=60.0,
+            max_retries=3,
+            anthropic_api_url="https://api.minimaxi.com",
+        )
     else:
         raise ValueError(f"Unknown LLM provider configured: {provider}")
 
@@ -149,10 +201,36 @@ def get_medium_model(temperature: float = 0.3) -> BaseChatModel:
         return ChatOpenAI(
             api_key=settings.ALIYUN_API_KEY,
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            model="qwen-turbo",
+            model="qwen/qwen3-4b",
             temperature=temperature,
             timeout=60.0,
             max_retries=3,
+        )
+    elif provider == "openrouter":
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            api_key=settings.OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
+            model="google/gemma-3-27b-it:free",
+            temperature=temperature,
+            timeout=120.0,
+            max_retries=3,
+            extra_headers={
+                "HTTP-Referer": "https://treeedu.ai",
+                "X-Title": "TreeEdu Agent",
+            },
+        )
+    elif provider == "minimax":
+        from langchain_anthropic import ChatAnthropic
+
+        return ChatAnthropic(
+            anthropic_api_key=settings.MINIMAX_API_KEY,
+            model="MiniMax-M2.5",
+            temperature=temperature,
+            timeout=120.0,
+            max_retries=3,
+            anthropic_api_url="https://api.minimaxi.com",
         )
     else:
         raise ValueError(f"Unknown LLM provider configured: {provider}")
@@ -192,6 +270,32 @@ def get_heavy_model(temperature: float = 0.2) -> BaseChatModel:
             timeout=180.0,
             max_retries=3,
         )
+    elif provider == "openrouter":
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            api_key=settings.OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
+            model="stepfun/step-3.5-flash:free",
+            temperature=temperature,
+            timeout=180.0,
+            max_retries=3,
+            extra_headers={
+                "HTTP-Referer": "https://treeedu.ai",
+                "X-Title": "TreeEdu Agent",
+            },
+        )
+    elif provider == "minimax":
+        from langchain_anthropic import ChatAnthropic
+
+        return ChatAnthropic(
+            anthropic_api_key=settings.MINIMAX_API_KEY,
+            model="MiniMax-M2.7",
+            temperature=temperature,
+            timeout=180.0,
+            max_retries=3,
+            anthropic_api_url="https://api.minimaxi.com",
+        )
     return _get_model(provider, temperature=temperature)
 
 
@@ -206,6 +310,32 @@ def get_vision_model(temperature: float = 0.0) -> BaseChatModel:
             api_key=settings.ALIYUN_API_KEY,
             base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
             model="qwen-vl-max-latest",
+            temperature=temperature,
+            timeout=120.0,
+            max_retries=3,
+        )
+    elif provider == "openrouter":
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            api_key=settings.OPENROUTER_API_KEY,
+            base_url="https://openrouter.ai/api/v1",
+            model="nvidia/nemotron-nano-12b-v2-vl:free",
+            temperature=temperature,
+            timeout=120.0,
+            max_retries=3,
+            extra_headers={
+                "HTTP-Referer": "https://treeedu.ai",
+                "X-Title": "TreeEdu Agent",
+            },
+        )
+    elif provider == "minimax":
+        from langchain_openai import ChatOpenAI
+
+        return ChatOpenAI(
+            api_key=settings.MINIMAX_API_KEY,
+            base_url="https://api.minimaxi.com/anthropic/v1",
+            model="MiniMax-M2.7",
             temperature=temperature,
             timeout=120.0,
             max_retries=3,

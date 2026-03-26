@@ -1,5 +1,5 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.agent.state import AgentState
 from app.utils.llm_router import get_heavy_model, get_medium_model, get_fast_model
@@ -110,12 +110,39 @@ async def tutor_node(state: AgentState):
     """
     print("--- ENTER TUTOR NODE ---")
 
+    # Check if we have incomplete tool calls in the message history
+    messages = state.get("messages", [])
+    if messages:
+        last_msg = messages[-1]
+        # If last message has tool_calls without corresponding ToolMessage, skip LLM call
+        if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
+            # Check if there's a ToolMessage after this
+            has_tool_response = any(
+                isinstance(m, ToolMessage)
+                and any(
+                    tc.get("id") == last_msg.tool_calls[0].get("id")
+                    for tc in last_msg.tool_calls
+                )
+                for m in messages
+            )
+            if not has_tool_response:
+                print(
+                    "--- TUTOR: DETECTED INCOMPLETE TOOL CALLS, SKIPPING LLM INVOKE ---"
+                )
+                return {}
+
     # 1. Read context
     tutor_ctx = state.get("tutor_context", {})
     health_score = tutor_ctx.get("current_health_score", 50)
     history = tutor_ctx.get("historical_mistakes", "无记录")
 
     lesson_step = tutor_ctx.get("lesson_step", "EXPLAIN")
+
+    # 如果课程已完成，直接结束
+    if lesson_step == "COMPLETED":
+        print("--- TUTOR: LESSON COMPLETED, SKIPPING LLM INVOKE ---")
+        return {}
+
     step_directive = STEP_TEACHING_DIRECTIVES.get(lesson_step, "")
 
     # 2. Dynamic model selection based on lesson step

@@ -277,3 +277,124 @@ jiaoyu_agent/
 3. **Environment**: Copy `.env.example` to `.env` and configure API keys
 4. **Database**: SQLite for development (`treeedu.db`)
 5. **Chinese UI**: Frontend contains Chinese text - preserve it
+
+## API Reference
+
+### 学习计划 API (`/api/lessons/plans`)
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/plans/{student_id}` | GET | 获取学生的学习计划，支持 `?material_id=` 筛选参数 |
+| `/plans/generate` | POST | 触发 Planner Agent 生成学习计划，需传 `student_id`, `material_id`, `start_date`, `sessions_per_week` |
+| `/plans/{student_id}` | DELETE | 删除学习计划，支持 `?material_id=` 删除单个教材计划 |
+
+### 学习计划数据模型 (PlanItem)
+
+```python
+class PlanItem(Base):
+    id: str                    # UUID
+    student_id: str            # 学生 ID
+    material_id: str           # 教材 ID (V1.2 新增)
+    node_id: str               # 知识节点 ID
+    scheduled_date: date       # 计划日期
+    task_type: TaskType        # NEW_KNOWLEDGE / REVIEW
+    status: PlanStatus         # PENDING / IN_PROGRESS / COMPLETED / MISSED
+    created_at: datetime
+    completed_at: datetime     # 完成时间
+```
+
+### 生成学习计划流程
+1. 前端调用 `POST /api/lessons/plans/generate` 传入 `student_id`, `material_id`, `start_date`, `sessions_per_week`
+2. 后端触发 Planner Agent (LangGraph)
+3. Planner Agent 调用 `get_material_node_list(material_id, student_id)` 获取知识树结构
+4. `get_material_node_list` 只返回 Level 2 的节点（实际课文），按章节顺序排序
+5. Planner Agent 调用 `create_study_plan` 创建计划项（含 `material_id`）
+6. 返回成功消息，前端刷新计划列表
+
+### Planner Agent 工具
+
+#### get_material_node_list
+- **功能**: 获取教材中未完成的课文节点列表
+- **参数**: `material_id`, `student_id` (可选)
+- **返回**: 按章节顺序排列的未完成节点列表
+- **排序规则**: 先按父章节的 seq_num，再按自身 seq_num
+- **过滤**: 只返回 Level 2 节点（有实际内容的课文），排除已完成节点
+
+#### create_study_plan
+- **功能**: 创建学习计划
+- **参数**: `student_id`, `material_id`, `node_ids`, `start_date`, `sessions_per_week`
+- **返回**: 创建成功的消息和计划项数量
+
+### 五步学习完成状态同步
+- 五步学习完成后，`guided_learning.py` 会自动更新 `PlanItem.status = COMPLETED`
+- 同时记录 `completed_at` 时间戳
+
+### 物料上传限制
+- PDF 文件最大限制: 200MB
+- 配置文件: `backend/app/routers/materials.py` 中的 `MAX_FILE_SIZE`
+
+### 物料解析与缓存机制
+
+#### PDF 解析流程
+
+系统支持自动检测 PDF 类型并选择最佳解析方式：
+
+```
+1. PyPDF2 (文本PDF，最快)
+   ↓ 失败（平均文字 < 100 字符）
+2. PyMuPDF (文本PDF备选)
+   ↓ 失败
+3. EasyOCR (扫描PDF，免费深度学习OCR)
+   ↓ 失败
+4. LLM OCR (最后手段，昂贵)
+```
+
+#### OCR 缓存机制
+
+系统为扫描版 PDF 提供缓存机制，避免重复 OCR 耗时：
+
+- **缓存位置**: `backend/cache/page_cache/{pdf_hash}.json`
+- **缓存内容**: 526 页 OCR 文本 + tokens
+- **首次上传**: 运行 EasyOCR（~36 分钟）+ 保存缓存
+- **失败后重试**: 从缓存加载（0 秒），节省大量时间
+- **清理时机**: 教材解析完成被人激活后自动清除
+
+##### 缓存相关 API
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/materials/{id}/cache` | DELETE | 清除指定教材的 OCR 缓存 |
+
+##### 使用示例
+
+```bash
+# 首次上传（会运行 EasyOCR + 保存缓存）
+POST /api/materials/{id}/upload
+# → 处理失败
+
+# 失败后重试（从缓存加载，0 秒）
+POST /api/materials/{id}/upload
+# → 节省 36 分钟！
+
+# 手动清理缓存
+DELETE /api/materials/{id}/cache
+```
+
+#### EasyOCR 集成
+
+- **位置**: `backend/pageindex/utils.py`
+- **模型**: `easyocr.Reader(['ch_sim', 'en'])`
+- **GPU 支持**: 默认 CPU 模式（Windows 兼容性问题）
+- **性能**: ~4 秒/页，526 页约 36 分钟
+
+#### 依赖更新
+
+`backend/requirements.txt` 新增依赖：
+
+```
+easyocr==1.7.2
+torch==2.10.0
+torchvision==0.25.0
+opencv-python-headless==4.13.0.92
+scikit-image==0.26.0
+```
