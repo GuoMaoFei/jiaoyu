@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useCallback, useState, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
-import { Breadcrumb, Button, message } from 'antd';
+import { Breadcrumb, Button, message, Tag } from 'antd';
 import { ArrowRightOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { useAuthStore } from '../../stores/useAuthStore';
 import { useChatStore } from '../../stores/useChatStore';
@@ -47,7 +47,7 @@ const StudyCabin: React.FC = () => {
         setSessionId,
         clearMessages,
     } = useChatStore();
-    const { currentStep, materialId, nodeId, nodeTitle, isCompleted, setLesson } = useLessonStore();
+    const { currentStep, materialId, nodeId, nodeTitle, isCompleted, setLesson, knowledgePoints } = useLessonStore();
     const { isStreaming, startStream, stopStream } = useSSE('/chat/stream');
 
     const intent = searchParams.get('intent') || 'tutor';
@@ -125,6 +125,9 @@ const StudyCabin: React.FC = () => {
                 message.error('请先登录');
                 return;
             }
+            if (isStreaming) {
+                return;
+            }
 
             // Always get the freshest state to avoid stale closures in setTimeout/useCallback
             const currentState = useLessonStore.getState();
@@ -199,7 +202,7 @@ const StudyCabin: React.FC = () => {
                 }
             );
         },
-        [user?.id, sessionId, startStream, addMessage, appendStreamToLastMessage, setCurrentAgent, setSessionId]
+        [user?.id, sessionId, startStream, addMessage, appendStreamToLastMessage, setCurrentAgent, setSessionId, isStreaming]
     );
 
     // Store handleSend in ref for use in useEffect
@@ -282,6 +285,18 @@ const StudyCabin: React.FC = () => {
 
                 {/* 五步闯关进度条 */}
                 <LessonProgress currentStep={currentStep} />
+
+                {/* 知识点标签 */}
+                {knowledgePoints && knowledgePoints.length > 0 && (
+                    <div className="px-4 pb-2 flex flex-wrap gap-2">
+                        <span className="text-xs text-slate-400 self-center mr-1">本节知识点:</span>
+                        {knowledgePoints.map((kp) => (
+                            <Tag key={kp.id} color="blue" className="text-xs">
+                                {kp.title}
+                            </Tag>
+                        ))}
+                    </div>
+                )}
 
                 {/* Agent 指示器 */}
                 <AgentIndicator agentId={currentAgent} toolName={toolName} />

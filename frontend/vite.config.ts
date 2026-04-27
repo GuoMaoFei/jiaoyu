@@ -17,6 +17,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      '/api/chat/stream': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+        timeout: 300000,
+      },
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,

@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import hashlib
+import math
 from datetime import datetime
 import time
 import json
@@ -687,17 +688,314 @@ def list_to_tree(data):
             # No parent, this is a root node
             root_nodes.append(node)
 
+    # --- Merge multiple independent trees ---
+    # When PageIndex produces multiple root trees (e.g., from TOC + body text),
+    # try to merge the finer-grained tree into the coarser-grained tree.
+    if len(root_nodes) > 1:
+        root_nodes = _merge_independent_trees(root_nodes)
+
     # Helper function to clean empty children arrays
     def clean_node(node):
-        if not node["nodes"]:
-            del node["nodes"]
-        else:
+        if node["nodes"]:
             for child in node["nodes"]:
                 clean_node(child)
+        else:
+            del node["nodes"]
         return node
+
+    # --- Hierarchy recovery ---
+    # When all nodes ended up as root (structure field was flat like "1","2",...)
+    # try to rebuild parent-child relationships.
+    if len(root_nodes) == len(data) and len(data) > 1:
+        # Strategy 2: title pattern matching
+        rebuilt = _rebuild_hierarchy_from_titles(data)
+        if rebuilt is not None:
+            return [clean_node(node) for node in rebuilt]
+
+        # Strategy 3: LLM-based classification (fallback)
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    rebuilt = pool.submit(
+                        asyncio.run, _rebuild_hierarchy_via_llm(data)
+                    ).result()
+            else:
+                rebuilt = asyncio.run(_rebuild_hierarchy_via_llm(data))
+        except Exception as e:
+            print(f"[_rebuild_hierarchy_via_llm] Failed to run: {e}")
+            rebuilt = None
+        if rebuilt is not None:
+            return [clean_node(node) for node in rebuilt]
 
     # Clean and return the tree
     return [clean_node(node) for node in root_nodes]
+
+
+def _rebuild_hierarchy_from_titles(data):
+    """Rebuild tree hierarchy when LLM produced flat structure codes.
+
+    Uses title patterns to detect container nodes (units/chapters) and
+    attach subsequent leaf nodes (lessons/articles) under them.
+
+    Returns list of root nodes with proper nesting, or None if unable.
+    """
+    import re as _re
+
+    _CONTAINER_PATTERNS = [
+        _re.compile(r'^第[一二三四五六七八九十\d]+[单元章节部篇]'),
+        _re.compile(r'^Unit\s+\d+', _re.IGNORECASE),
+        _re.compile(r'^Chapter\s+\d+', _re.IGNORECASE),
+        _re.compile(r'^Part\s+\d+', _re.IGNORECASE),
+        _re.compile(r'^古诗词诵读'),
+    ]
+    _SIBLING_STOP_PATTERNS = [
+        _re.compile(r'^第[一二三四五六七八九十\d]+[单元章节部篇]'),
+        _re.compile(r'^Unit\s+\d+', _re.IGNORECASE),
+        _re.compile(r'^Chapter\s+\d+', _re.IGNORECASE),
+        _re.compile(r'^Part\s+\d+', _re.IGNORECASE),
+        _re.compile(r'^单元学习任务'),
+        _re.compile(r'^古诗词诵读'),
+    ]
+
+    def _is_container(title):
+        for pat in _CONTAINER_PATTERNS:
+            if pat.match(title.strip()):
+                return True
+        return False
+
+    def _is_sibling_stop(title):
+        for pat in _SIBLING_STOP_PATTERNS:
+            if pat.match(title.strip()):
+                return True
+        return False
+
+    container_count = sum(1 for item in data if _is_container(item.get("title", "")))
+    if container_count < 1:
+        return None
+
+    root_nodes = []
+    current_container = None
+
+    for item in data:
+        title = item.get("title", "").strip()
+        node = dict(item)
+        node["nodes"] = []
+
+        if _is_container(title):
+            if current_container is not None:
+                if not current_container["nodes"]:
+                    del current_container["nodes"]
+                root_nodes.append(current_container)
+            current_container = node
+        elif _is_sibling_stop(title):
+            if current_container is not None:
+                if not current_container["nodes"]:
+                    del current_container["nodes"]
+                root_nodes.append(current_container)
+                current_container = None
+            root_nodes.append(node)
+        elif current_container is not None:
+            current_container["nodes"].append(node)
+        else:
+            root_nodes.append(node)
+
+    if current_container is not None:
+        if not current_container["nodes"]:
+            del current_container["nodes"]
+        root_nodes.append(current_container)
+
+    nested_count = sum(
+        len(n.get("nodes", [])) for n in root_nodes if "nodes" in n
+    )
+    if nested_count == 0:
+        return None
+
+    print(f"[_rebuild_hierarchy] Recovered hierarchy: {len(root_nodes)} roots, {nested_count} nested children")
+    return root_nodes
+
+
+async def _rebuild_hierarchy_via_llm(data, opt=None):
+    """Strategy 3: Use a single LLM call to classify flat nodes into a tree.
+
+    Only triggered when strategy 1 (structure codes) and strategy 2 (title
+    patterns) both fail.  Sends just the title list (tiny token cost) and
+    asks the LLM to group them into a hierarchy.
+
+    Returns list of root nodes with proper nesting, or None on failure.
+    """
+    if not data:
+        return None
+
+    title_list = []
+    for i, item in enumerate(data):
+        title = item.get("title", "").strip()
+        title_list.append(f"{i}. {title}")
+
+    prompt = f"""You are given a flat list of section titles from a document (with their indices).
+Your task is to organize them into a hierarchical tree structure by identifying
+which sections are containers (units/chapters/parts) and which are their children.
+
+Rules:
+- A container node should have a "nodes" array listing the indices of its child sections.
+- Sections that belong to a container should NOT appear at the top level.
+- The output must preserve the original order.
+- Every index from 0 to {len(data)-1} must appear exactly once.
+
+Section titles:
+{chr(10).join(title_list)}
+
+Return a JSON array. Each element is either:
+  {{"idx": <index>, "nodes": [<child_indices>]}}  — a container with children
+  {{"idx": <index>}}  — a standalone section
+
+Directly return the JSON array. Do not output anything else."""
+
+    try:
+        from .utils import get_model_for_task, get_task_params
+        model = get_model_for_task("title_check", opt)
+        task_params = get_task_params("title_check", opt)
+        response = await ChatGPT_API_async(
+            model=model, prompt=prompt, task_params=task_params
+        )
+        result = extract_json(response)
+    except Exception as e:
+        print(f"[_rebuild_hierarchy_via_llm] LLM call failed: {e}")
+        return None
+
+    if not isinstance(result, list) or not result:
+        print(f"[_rebuild_hierarchy_via_llm] Unexpected LLM output type: {type(result)}")
+        return None
+
+    item_by_idx = {i: item for i, item in enumerate(data)}
+    used_indices = set()
+
+    def _build_node(entry):
+        idx = entry.get("idx")
+        if idx is None or idx not in item_by_idx:
+            return None
+        item = item_by_idx[idx]
+        used_indices.add(idx)
+        node = dict(item)
+        node["nodes"] = []
+        child_indices = entry.get("nodes", [])
+        for child_idx in child_indices:
+            if child_idx in item_by_idx and child_idx not in used_indices:
+                child_item = item_by_idx[child_idx]
+                used_indices.add(child_idx)
+                child_node = dict(child_item)
+                node["nodes"].append(child_node)
+        if not node["nodes"]:
+            del node["nodes"]
+        return node
+
+    root_nodes = []
+    for entry in result:
+        node = _build_node(entry)
+        if node is not None:
+            root_nodes.append(node)
+
+    if len(used_indices) < len(data) * 0.5:
+        print(f"[_rebuild_hierarchy_via_llm] Only covered {len(used_indices)}/{len(data)} nodes, discarding")
+        return None
+
+    for i in range(len(data)):
+        if i not in used_indices:
+            item = item_by_idx[i]
+            orphan = dict(item)
+            root_nodes.append(orphan)
+
+    nested_count = sum(len(n.get("nodes", [])) for n in root_nodes if "nodes" in n)
+    if nested_count == 0:
+        return None
+
+    print(f"[_rebuild_hierarchy_via_llm] Recovered hierarchy via LLM: {len(root_nodes)} roots, {nested_count} nested children")
+    return root_nodes
+
+
+def _merge_independent_trees(root_nodes):
+    """Merge multiple independent trees produced by PageIndex.
+
+    When PageIndex detects titles from both TOC pages and body text,
+    it may produce two or more independent trees with overlapping content.
+    This function merges the finer-grained tree into the coarser-grained tree
+    by matching root node titles.
+    """
+    if len(root_nodes) <= 1:
+        return root_nodes
+
+    import re as _re
+
+    def _count_descendants(node):
+        children = node.get("nodes", [])
+        count = len(children)
+        for child in children:
+            count += _count_descendants(child)
+        return count
+
+    def _normalize_title(title):
+        """Remove leading numbers/dots/spaces from a title."""
+        return _re.sub(r'^[\d\.\s]+', '', title).strip()
+
+    def _title_match(title_a, title_b):
+        """Check if two titles refer to the same chapter/section."""
+        if not title_a or not title_b:
+            return False
+        norm_a = _normalize_title(title_a)
+        norm_b = _normalize_title(title_b)
+        if norm_a and norm_b and (norm_a == norm_b or norm_a in norm_b or norm_b in norm_a):
+            return True
+        if len(norm_a) >= 4 and len(norm_b) >= 4 and norm_a[:4] == norm_b[:4]:
+            return True
+        return False
+
+    def _merge_children_into(target, source):
+        """Merge source children into target, avoiding duplicates."""
+        target_children = target.get("nodes", [])
+        source_children = source.get("nodes", [])
+
+        for child in source_children:
+            child_title = _normalize_title(child.get("title", ""))
+            is_dup = False
+            match_target = None
+            for existing_child in target_children:
+                if _title_match(child_title, _normalize_title(existing_child.get("title", ""))):
+                    is_dup = True
+                    match_target = existing_child
+                    break
+            if not is_dup:
+                target_children.append(child)
+            elif match_target and child.get("nodes"):
+                _merge_children_into(match_target, child)
+
+        target["nodes"] = target_children
+        if source.get("end_index") and target.get("end_index"):
+            if source["end_index"] > target["end_index"]:
+                target["end_index"] = source["end_index"]
+
+    # Primary tree = the one with the most descendants
+    trees_by_size = sorted(root_nodes, key=lambda n: _count_descendants(n), reverse=True)
+    primary_tree = [trees_by_size[0]]
+    secondary_trees = trees_by_size[1:]
+
+    unmerged = []
+    for sec_root in secondary_trees:
+        sec_title = sec_root.get("title", "")
+        merged = False
+        for pri_root in primary_tree:
+            pri_children = pri_root.get("nodes", [])
+            for pri_child in pri_children:
+                if _title_match(sec_title, pri_child.get("title", "")):
+                    _merge_children_into(pri_child, sec_root)
+                    merged = True
+                    break
+            if merged:
+                break
+        if not merged:
+            unmerged.append(sec_root)
+
+    return primary_tree + unmerged
 
 
 def add_preface_if_needed(data):
@@ -1296,7 +1594,38 @@ def post_processing(structure, end_physical_index):
                 item["end_index"] = structure[i + 1]["physical_index"]
         else:
             item["end_index"] = end_physical_index
-    tree = list_to_tree(structure)
+    # --- Filter out cover/preface page noise nodes ---
+    import re as _re
+    _COVER_NOISE_PATTERNS = [
+        _re.compile(r'^目\s*录$', _re.IGNORECASE),
+        _re.compile(r'^Preface$', _re.IGNORECASE),
+        _re.compile(r'^前\s*言$', _re.IGNORECASE),
+        _re.compile(r'^序\s*言$', _re.IGNORECASE),
+        _re.compile(r'^Contents$', _re.IGNORECASE),
+    ]
+    _COVER_TEXT_KEYWORDS = ['必修', '教科书', '普通高中', '上册', '下册', '语文 必', '必 修']
+
+    filtered_structure = []
+    for item in structure:
+        title = item.get("title", "")
+        start_idx_item = item.get("start_index")
+        is_noise = False
+        if start_idx_item is not None and start_idx_item <= 2:
+            for pat in _COVER_NOISE_PATTERNS:
+                if pat.match(title.strip()):
+                    is_noise = True
+                    break
+            if not is_noise and len(title.strip()) <= 3:
+                is_noise = True
+            if not is_noise:
+                for kw in _COVER_TEXT_KEYWORDS:
+                    if kw in title:
+                        is_noise = True
+                        break
+        if not is_noise:
+            filtered_structure.append(item)
+
+    tree = list_to_tree(filtered_structure)
     if len(tree) != 0:
         return tree
     else:
@@ -1466,6 +1795,103 @@ async def generate_summaries_for_structure(structure, opt=None):
     return structure
 
 
+async def generate_summaries_batch(structure, opt=None, batch_size=6):
+    """批量摘要生成：将节点按 batch_size 分组，每组一次 LLM 调用生成所有摘要。
+
+    相比 generate_summaries_for_structure（每个节点一次 LLM 调用），
+    本函数将多个节点的摘要请求合并到一次 LLM 调用中，大幅减少 LLM 调用次数。
+
+    Args:
+        structure: 结构树（list 或 dict）
+        opt: 配置选项，用于获取模型和任务参数
+        batch_size: 每批处理的节点数，默认 6
+
+    Returns:
+        添加了 summary 字段的结构树（原地修改并返回）
+    """
+    nodes = structure_to_list(structure)
+    total_nodes = len(nodes)
+    if total_nodes == 0:
+        return structure
+
+    model = get_model_for_task("node_summary", opt)
+    task_params = get_task_params("node_summary", opt)
+
+    total_batches = math.ceil(total_nodes / batch_size)
+    print(f"[BATCH-SUMMARY] 开始批量摘要生成: {total_nodes} 个节点, 批大小={batch_size}, 共 {total_batches} 批")
+
+    for batch_idx in range(total_batches):
+        start = batch_idx * batch_size
+        end = min(start + batch_size, total_nodes)
+        batch_nodes = nodes[start:end]
+
+        # 构建批量 prompt
+        node_descriptions = []
+        for i, node in enumerate(batch_nodes):
+            title = node.get("title", "Untitled")
+            text = node.get("text", "")
+            text_preview = text[:500] if text else ""
+            node_descriptions.append(
+                f"节点 {i}:\n标题: {title}\n内容摘要: {text_preview}"
+            )
+
+        nodes_text = "\n\n".join(node_descriptions)
+        prompt = f"""为以下节点生成摘要。每个摘要应概括该节点的主要内容要点。
+
+{nodes_text}
+
+请以JSON数组格式返回结果，格式如下：
+[
+  {{"index": 0, "summary": "节点0的摘要"}},
+  {{"index": 1, "summary": "节点1的摘要"}},
+  ...
+]
+
+直接返回JSON数组，不要包含任何其他文本。"""
+
+        try:
+            response = await ChatGPT_API_async(model, prompt, task_params=task_params)
+            if response == "Error":
+                print(f"[BATCH-SUMMARY] 第 {batch_idx + 1}/{total_batches} 批 LLM 调用失败，跳过")
+                continue
+
+            # 解析 JSON 结果
+            parsed = extract_json(response)
+            if not isinstance(parsed, list):
+                # 尝试从 dict 中提取列表
+                if isinstance(parsed, dict):
+                    for key in ("summaries", "results", "items", "data"):
+                        if key in parsed and isinstance(parsed[key], list):
+                            parsed = parsed[key]
+                            break
+                if not isinstance(parsed, list):
+                    print(f"[BATCH-SUMMARY] 第 {batch_idx + 1}/{total_batches} 批解析结果不是列表，跳过")
+                    continue
+
+            # 回填摘要到对应节点
+            filled_count = 0
+            for item in parsed:
+                if not isinstance(item, dict):
+                    continue
+                idx = item.get("index")
+                summary = item.get("summary")
+                if idx is None or summary is None:
+                    continue
+                if not isinstance(idx, int) or idx < 0 or idx >= len(batch_nodes):
+                    continue
+                batch_nodes[idx]["summary"] = summary
+                filled_count += 1
+
+            print(f"[BATCH-SUMMARY] 第 {batch_idx + 1}/{total_batches} 批完成: 成功回填 {filled_count}/{len(batch_nodes)} 个节点摘要")
+
+        except Exception as e:
+            print(f"[BATCH-SUMMARY] 第 {batch_idx + 1}/{total_batches} 批处理异常: {e}，跳过该批")
+            continue
+
+    print(f"[BATCH-SUMMARY] 批量摘要生成完成: 共 {total_batches} 批 LLM 调用")
+    return structure
+
+
 def create_clean_structure_for_description(structure):
     """
     Create a clean structure for document description generation,
@@ -1557,3 +1983,96 @@ class ConfigLoader:
         self._validate_keys(user_dict)
         merged = {**self._default_dict, **user_dict}
         return config(**merged)
+
+
+# ── LLM Call Optimization Tracking ──────────────────────────────────────
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class LLMCallStats:
+    """Single-stage LLM call statistics."""
+    stage: str
+    call_count_before: int = 0
+    call_count_after: int = 0
+    rule_hit_count: int = 0
+    rule_miss_count: int = 0
+
+    @property
+    def reduction_ratio(self) -> float:
+        if self.call_count_before == 0:
+            return 0.0
+        return 1.0 - (self.call_count_after / self.call_count_before)
+
+    @property
+    def rule_hit_rate(self) -> float:
+        total = self.rule_hit_count + self.rule_miss_count
+        if total == 0:
+            return 0.0
+        return self.rule_hit_count / total
+
+
+class LLMCallTracker:
+    """LLM call tracker for optimization observability."""
+
+    def __init__(self):
+        self._stats: dict = {}
+
+    def _ensure_stage(self, stage: str) -> LLMCallStats:
+        if stage not in self._stats:
+            self._stats[stage] = LLMCallStats(stage=stage)
+        return self._stats[stage]
+
+    def record_rule_hit(self, stage: str):
+        s = self._ensure_stage(stage)
+        s.rule_hit_count += 1
+
+    def record_rule_miss(self, stage: str):
+        s = self._ensure_stage(stage)
+        s.rule_miss_count += 1
+
+    def record_llm_call(self, stage: str):
+        s = self._ensure_stage(stage)
+        s.call_count_after += 1
+
+    def set_before_count(self, stage: str, count: int):
+        s = self._ensure_stage(stage)
+        s.call_count_before = count
+
+    def summary(self) -> dict:
+        result = {}
+        total_before = 0
+        total_after = 0
+        for stage, s in self._stats.items():
+            result[stage] = {
+                "before": s.call_count_before,
+                "after": s.call_count_after,
+                "reduction": f"{s.reduction_ratio:.0%}",
+                "rule_hit": s.rule_hit_count,
+                "rule_miss": s.rule_miss_count,
+            }
+            total_before += s.call_count_before
+            total_after += s.call_count_after
+            print(
+                f"[LLM-OPT] stage={stage}: "
+                f"before={s.call_count_before}, after={s.call_count_after}, "
+                f"reduction={s.reduction_ratio:.0%}, "
+                f"rule_hit={s.rule_hit_count}, rule_miss={s.rule_miss_count}"
+            )
+        total_reduction = (1.0 - total_after / total_before) if total_before > 0 else 0.0
+        print(f"[LLM-OPT] TOTAL: before={total_before}, after={total_after}, reduction={total_reduction:.0%}")
+        result["_total"] = {
+            "before": total_before,
+            "after": total_after,
+            "reduction": f"{total_reduction:.0%}",
+        }
+        return result
+
+
+# Global tracker instance
+_llm_tracker: LLMCallTracker = LLMCallTracker()
+
+
+def get_llm_tracker() -> LLMCallTracker:
+    return _llm_tracker

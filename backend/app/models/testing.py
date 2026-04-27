@@ -37,12 +37,18 @@ class StudentMistake(Base):
     id = Column(String, primary_key=True, default=generate_uuid, index=True)
     student_id = Column(String, ForeignKey("students.id"), nullable=False, index=True)
     node_id = Column(String, ForeignKey("knowledge_nodes.id"), nullable=False, index=True)
+    knowledge_point_id = Column(
+        String, ForeignKey("knowledge_points.id"), nullable=True, index=True
+    )
     
     original_question_id = Column(String, ForeignKey("questions.id"), nullable=True) 
     source_message_id = Column(String, ForeignKey("chat_messages.id"), nullable=True) 
     
     error_reason = Column(String)
-    consecutive_correct_count = Column(Integer, default=0) # Must reach threshold to be MASTERED
+    root_cause_summary = Column(Text)
+    review_count = Column(Integer, default=0)
+    last_reviewed_at = Column(DateTime)
+    consecutive_correct_count = Column(Integer, default=0)
     status = Column(Enum(MistakeStatus, name="mistake_status_enum"), default=MistakeStatus.ACTIVE)
     next_review_date = Column(Date)
     

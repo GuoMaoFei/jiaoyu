@@ -4,6 +4,8 @@ from app.models.user import Student, Parent, BookActivation, StudentNodeState
 from app.models.chat import ChatSession, ChatMessage, ChatAssessment
 from app.models.lesson import PlanItem, LessonProgress
 from app.models.testing import TestPaper, TestRecord, StudentMistake
+from app.models.knowledge_point import KnowledgePoint, KnowledgePointMapping
+from app.models.quiz import NodeQuiz
 
 __all__ = [
     "Base",
@@ -11,5 +13,7 @@ __all__ = [
     "Student", "Parent", "BookActivation", "StudentNodeState",
     "ChatSession", "ChatMessage", "ChatAssessment",
     "PlanItem", "LessonProgress",
-    "TestPaper", "TestRecord", "StudentMistake"
+    "TestPaper", "TestRecord", "StudentMistake",
+    "KnowledgePoint", "KnowledgePointMapping",
+    "NodeQuiz",
 ]

@@ -101,7 +101,7 @@ async def generate_exam(req: GenerateExamRequest, db: AsyncSession = Depends(get
     for i, node in enumerate(nodes):
         user_msg = HumanMessage(content=f"为知识点「{node.title}」出一道单选题。")
         try:
-            resp = model.invoke([sys_msg, user_msg])
+            resp = await model.ainvoke([sys_msg, user_msg])
             txt = resp.content.replace("```json", "").replace("```", "").strip()
             q_data = json.loads(txt)
             questions.append({
@@ -148,11 +148,14 @@ async def generate_exam(req: GenerateExamRequest, db: AsyncSession = Depends(get
 
 @router.post("/submit")
 async def submit_exam(req: SubmitExamRequest, db: AsyncSession = Depends(get_db)):
-    """
-    Submits exam answers. Evaluates them (using exact match or LLM for short answers),
-    calculates score, updates StudentNodeState, inserts Mistakes, and saves TestRecord.
-    """
-    questions = req.paper_metadata.get("questions", [])
+    paper_stmt = select(TestPaper).where(TestPaper.id == req.exam_id)
+    paper_result = await db.execute(paper_stmt)
+    paper = paper_result.scalars().first()
+    if not paper:
+        raise HTTPException(status_code=404, detail="试卷不存在")
+
+    paper_data = json.loads(paper.snapshot_question_md)
+    questions = paper_data.get("questions", [])
     q_map = {q["id"]: q for q in questions}
     
     results = []
@@ -179,16 +182,15 @@ async def submit_exam(req: SubmitExamRequest, db: AsyncSession = Depends(get_db)
             sys_msg = SystemMessage(content="你是客观的阅卷老师。比较学生的简答和标准答案，判断对错。返回JSON格式: {\"is_correct\": true/false, \"explanation\": \"简短评语\"}")
             user_msg = HumanMessage(content=f"题目: {q['question_md']}\n标答: {correct_ans}\n学生回答: {student_ans}")
             try:
-                resp = model.invoke([sys_msg, user_msg])
-                # Extremely primitive json extract
+                resp = await model.ainvoke([sys_msg, user_msg])
                 txt = resp.content.replace("```json", "").replace("```", "").strip()
                 res_obj = json.loads(txt)
                 is_correct = res_obj.get("is_correct", False)
                 explanation = res_obj.get("explanation", "自动批阅完成")
             except Exception as e:
                 logger.warning(f"LLM grading failed: {e}")
-                is_correct = len(student_ans) > 5 # dummy fallback
-                explanation = "系统自动批阅回退策略"
+                is_correct = False
+                explanation = "自动批阅失败，待人工审核"
                 
         if is_correct:
             total_correct += 1
@@ -232,9 +234,9 @@ async def submit_exam(req: SubmitExamRequest, db: AsyncSession = Depends(get_db)
                     consecutive_correct_count=0
                 ))
                 
-    final_score = round((total_correct / total_questions) * req.paper_metadata.get("total_score", 100)) if total_questions else 0
-    
-    # Save TestRecord
+    total_score = paper_data.get("total_score", 100)
+    final_score = round((total_correct / total_questions) * total_score) if total_questions else 0
+
     tr = TestRecord(
         test_paper_id=req.exam_id,
         student_score=final_score,
@@ -243,14 +245,14 @@ async def submit_exam(req: SubmitExamRequest, db: AsyncSession = Depends(get_db)
     )
     db.add(tr)
     await db.commit()
-    
+
     return {
         "status": "ok",
         "exam_result": {
             "exam_id": req.exam_id,
-            "title": req.paper_metadata.get("title", "Exam"),
+            "title": paper_data.get("title", "Exam"),
             "score": final_score,
-            "total_score": req.paper_metadata.get("total_score", 100),
+            "total_score": total_score,
             "correct_count": total_correct,
             "total_count": total_questions,
             "accuracy_pct": round((total_correct/total_questions)*100) if total_questions else 0,

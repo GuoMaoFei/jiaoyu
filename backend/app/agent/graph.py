@@ -7,13 +7,19 @@ from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
 from langgraph.prebuilt import ToolNode
 
 from app.agent.state import AgentState
-from app.agent.sub_agents.tutor import tutor_node
+from app.agent.sub_agents.import_agent import import_agent
+from app.agent.sub_agents.explain_agent import explain_agent
+from app.agent.sub_agents.example_agent import example_agent
+from app.agent.sub_agents.practice_agent import practice_agent
+from app.agent.sub_agents.summary_agent import summary_agent
 from app.agent.sub_agents.assessor import assessor_node
 from app.agent.sub_agents.planner import planner_node
 from app.agent.sub_agents.variant import variant_node
 from app.agent.sub_agents.reporter import reporter_node
 from app.agent.tools.pageindex_tools import search_knowledge_tree
-from app.models.material import KnowledgeNode
+from app.agent.tools.kp_tools import search_knowledge_points
+from app.models.material import KnowledgeNode, Material
+from app.models.knowledge_point import KnowledgePoint, KnowledgePointMapping
 from sqlalchemy import select
 from app.database import AsyncSessionLocal
 from app.agent.tools.assessment_tools import save_assessment
@@ -24,15 +30,10 @@ from app.agent.tools.reporter_tools import (
     get_mistake_summary,
 )
 from app.services.memory_overlay import get_student_memory_overlay
-from app.utils.llm_router import get_fast_model
 
-# We create the tool node that LangGraph will call when models return tool_calls.
-# This single ToolNode handles tools from ALL sub-agents.
-# Note: search_knowledge_tree is now dynamically created in tutor_node,
-# but we still need a static version or a placeholder if the model expects it in the global node.
-# For now, we will add it back to the tools list once we restore it in pageindex_tools.
 all_tools = [
     search_knowledge_tree,
+    search_knowledge_points,
     save_assessment,
     create_study_plan,
     get_material_node_list,
@@ -43,22 +44,19 @@ all_tools = [
 ]
 tool_node = ToolNode(all_tools)
 
+_STEP_NODE_MAP = {
+    "IMPORT": "import",
+    "EXPLAIN": "explain",
+    "EXAMPLE": "example",
+    "PRACTICE": "practice",
+    "SUMMARY": "summary",
+}
+
 
 async def supervisor_node(state: AgentState):
-    """
-    The Supervisor decides what sub-agent should handle the user's input.
-    It queries the database for the student's real learning profile (Memory Overlay)
-    and injects it into the agent contexts.
-
-    For Sprint 3 PoC, intent is still locked to "tutor".
-    In the future, this node will use get_fast_model() to classify the intent.
-    """
     print("--- ENTER SUPERVISOR NODE ---")
-    # Use incoming intent if provided, otherwise mock to tutor
     current_intent = state.get("current_intent") or "tutor"
 
-    # === REAL Memory Overlay Injection ===
-    # Query the student's actual learning profile from the database
     student_id = state.get("student_id", "")
     material_id = state.get("material_id")
 
@@ -74,15 +72,20 @@ async def supervisor_node(state: AgentState):
     tutor_ctx["current_health_score"] = overlay["avg_health_score"]
     tutor_ctx["historical_mistakes"] = overlay["historical_mistakes_summary"]
 
-    # Inject Guided Learning Step Context
     tutor_ctx["lesson_step"] = state.get("lesson_step")
 
-    # Check if there are pre-injected tool outputs from guided learning
+    if material_id:
+        async with AsyncSessionLocal() as db:
+            mat_result = await db.execute(select(Material).where(Material.id == material_id))
+            mat = mat_result.scalars().first()
+            if mat:
+                tutor_ctx["subject"] = mat.subject
+                print(f"--- MATERIAL SUBJECT: {mat.subject} ---")
+
     tool_outputs = state.get("tool_outputs", {})
     if "example_content" in tool_outputs:
         tutor_ctx["example_content"] = tool_outputs["example_content"]
 
-    # === Node Content Injection ===
     node_id = state.get("node_id")
     print(f"--- NODE_ID FROM STATE: {node_id} ---")
     if node_id:
@@ -93,21 +96,61 @@ async def supervisor_node(state: AgentState):
             node = result.scalars().first()
             if node:
                 tutor_ctx["node_title"] = node.title
-                # Extract summary from pi_nodes_json since content_md was moved to KnowledgeContent
-                _node_summary = ""
-                if (
-                    node.pi_nodes_json
-                    and isinstance(node.pi_nodes_json, list)
-                    and len(node.pi_nodes_json) > 0
-                ):
-                    _node_summary = node.pi_nodes_json[0].get("summary", "")
-                tutor_ctx["node_content"] = (
-                    _node_summary
-                    or f"本节主题：{node.title}。请使用 search_knowledge_tree 工具检索详细内容。"
-                )
-                print(
-                    f"--- INJECTED NODE: title='{node.title}', preview_len={len(_node_summary)} ---"
-                )
+                prefetched = False
+                if material_id and student_id:
+                    try:
+                        knowledge_result = await search_knowledge_tree.ainvoke({
+                            "query": node.title,
+                            "material_id": material_id,
+                            "student_id": student_id,
+                            "current_node_id": str(node_id),
+                            "expert_preference": overlay.get("historical_mistakes_summary", ""),
+                        })
+                        tutor_ctx["node_content"] = knowledge_result
+                        tutor_ctx["knowledge_prefetched"] = True
+                        prefetched = True
+                        print(f"--- PREFETCHED KNOWLEDGE: {len(knowledge_result)} chars ---")
+                    except Exception as e:
+                        print(f"--- PREFETCH FAILED: {e}, fallback to summary ---")
+
+                # 预取当前节点关联的知识点（含层级和教材映射关系）
+                try:
+                    kp_result = await db.execute(
+                        select(KnowledgePoint)
+                        .join(KnowledgePointMapping, KnowledgePoint.id == KnowledgePointMapping.knowledge_point_id)
+                        .where(KnowledgePointMapping.knowledge_node_id == node.id)
+                    )
+                    kp_rows = kp_result.scalars().all()
+                    if kp_rows:
+                        # 构建结构化的知识点上下文
+                        kp_lines = []
+                        for kp in kp_rows:
+                            level_indent = "  " * (kp.level - 1)
+                            kp_lines.append(
+                                f"{level_indent}- [{kp.title}] (层级{kp.level}) {kp.summary or ''}"
+                            )
+                            if kp.keywords:
+                                kp_lines.append(f"{level_indent}  关键词: {kp.keywords}")
+                        tutor_ctx["knowledge_points_context"] = "\n".join(kp_lines)
+                        print(f"--- PREFETCHED {len(kp_rows)} KNOWLEDGE POINTS for node {node_id} ---")
+                    else:
+                        tutor_ctx["knowledge_points_context"] = "（本节暂无知识点标签）"
+                except Exception as e:
+                    print(f"--- KP PREFETCH FAILED: {e} ---")
+                    tutor_ctx["knowledge_points_context"] = ""
+                if not prefetched:
+                    _node_summary = ""
+                    if (
+                        node.pi_nodes_json
+                        and isinstance(node.pi_nodes_json, list)
+                        and len(node.pi_nodes_json) > 0
+                    ):
+                        _node_summary = node.pi_nodes_json[0].get("summary", "")
+                    tutor_ctx["node_content"] = (
+                        _node_summary
+                        or f"本节主题：{node.title}。请使用 search_knowledge_tree 工具检索详细内容。"
+                    )
+                    print(f"--- INJECTED NODE: title='{node.title}', preview_len={len(_node_summary)} ---")
             else:
                 print(f"--- WARNING: node_id={node_id} NOT FOUND in database ---")
 
@@ -116,64 +159,66 @@ async def supervisor_node(state: AgentState):
 
     return {
         "current_intent": current_intent,
+        "subject": tutor_ctx.get("subject"),
         "tutor_context": tutor_ctx,
         "assessor_context": assessor_ctx,
     }
 
 
 def router_after_supervisor(state: AgentState) -> str:
-    """Routes from supervisor to the appropriate sub-agent"""
     intent = state.get("current_intent")
-    if intent == "assessor":
-        return "assessor"
-    if intent == "planner":
-        return "planner"
-    if intent == "variant":
-        return "variant"
-    if intent == "reporter":
-        return "reporter"
-    # Default to tutor
-    return "tutor"
+    if intent in ("assessor", "planner", "variant", "reporter"):
+        return intent
+
+    lesson_step = state.get("lesson_step") or "EXPLAIN"
+    if lesson_step == "COMPLETED":
+        print("--- SUPERVISOR: LESSON COMPLETED ---")
+        return END
+
+    step_node = _STEP_NODE_MAP.get(lesson_step, "explain")
+    print(f"--- SUPERVISOR: routing to step '{step_node}' (lesson_step={lesson_step}) ---")
+    return step_node
 
 
-def router_after_tutor(state: AgentState) -> str:
-    """Routes after the tutor model generates a response."""
+def _router_after_step(state: AgentState) -> str:
     messages = state["messages"]
     last_message = messages[-1]
 
-    # If the model decided to call a tool, route to tools
     if last_message.tool_calls:
-        print(f"--- TUTOR ROUTING TO TOOLS: {last_message.tool_calls} ---")
+        print(f"--- STEP ROUTING TO TOOLS: {last_message.tool_calls[0].get('name')} ---")
+        return "tools"
+    return END
+
+
+def _router_after_step_with_assessor(state: AgentState) -> str:
+    messages = state["messages"]
+    last_message = messages[-1]
+
+    if last_message.tool_calls:
+        print(f"--- STEP ROUTING TO TOOLS: {last_message.tool_calls[0].get('name')} ---")
         return "tools"
 
-    # Tutor gave a final answer -> hand off to Assessor for implicit evaluation
-    print("--- TUTOR PROVIDED FINAL ANSWER, HANDING OFF TO ASSESSOR ---")
+    print("--- STEP COMPLETED, HANDING OFF TO ASSESSOR ---")
     return "assessor"
 
 
 def router_after_assessor(state: AgentState) -> str:
-    """Routes after the assessor model generates a response."""
     messages = state["messages"]
-    last_message = messages[-1]
+    if not messages:
+        return END
 
-    # If the assessor wants to call tool (save_assessment), route to tools
-    if last_message.tool_calls:
+    last_message = messages[-1]
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         print(f"--- ASSESSOR ROUTING TO TOOLS: {last_message.tool_calls} ---")
         return "tools"
 
-    # Otherwise, assessor is done
     print("--- ASSESSOR COMPLETED EVALUATION ---")
     return END
 
 
 def router_after_tools(state: AgentState) -> str:
-    """
-    Routes after a tool has been executed.
-    We need to figure out which agent issued the tool call so we route back to them.
-    """
     messages = state["messages"]
 
-    # Walk backwards to find the AI message that triggered the tool call
     for msg in reversed(messages):
         if hasattr(msg, "tool_calls") and msg.tool_calls:
             tool_name = msg.tool_calls[0].get("name", "")
@@ -190,53 +235,52 @@ def router_after_tools(state: AgentState) -> str:
                 print("--- TOOLS DONE, RETURNING TO REPORTER ---")
                 return "reporter"
             else:
-                print("--- TOOLS DONE, RETURNING TO TUTOR ---")
-                return "tutor"
-        # Stop looking if we hit a ToolMessage (the result we just produced)
+                # search_knowledge_tree — route back to the step that called it
+                # Walk further back to find which step agent issued the call
+                for prev in messages[:messages.index(msg)]:
+                    if hasattr(prev, "tool_calls") and prev.tool_calls:
+                        pass
+                # Fallback: determine by lesson_step
+                lesson_step = state.get("lesson_step") or "EXPLAIN"
+                step_node = _STEP_NODE_MAP.get(lesson_step, "explain")
+                print(f"--- TOOLS DONE, RETURNING TO {step_node} ---")
+                return step_node
         if isinstance(msg, ToolMessage):
             continue
         break
 
-    # Fallback to tutor
-    print("--- TOOLS DONE, FALLBACK TO TUTOR ---")
-    return "tutor"
+    lesson_step = state.get("lesson_step") or "EXPLAIN"
+    step_node = _STEP_NODE_MAP.get(lesson_step, "explain")
+    print(f"--- TOOLS DONE, FALLBACK TO {step_node} ---")
+    return step_node
 
 
 def router_after_planner(state: AgentState) -> str:
-    """Routes after the planner model generates a response."""
     messages = state["messages"]
     last_message = messages[-1]
-
     if last_message.tool_calls:
         print(f"--- PLANNER ROUTING TO TOOLS: {last_message.tool_calls} ---")
         return "tools"
-
     print("--- PLANNER COMPLETED PLAN ---")
     return END
 
 
 def router_after_variant(state: AgentState) -> str:
-    """Routes after the variant model generates a response."""
     messages = state["messages"]
     last_message = messages[-1]
-
     if last_message.tool_calls:
         print(f"--- VARIANT ROUTING TO TOOLS: {last_message.tool_calls} ---")
         return "tools"
-
     print("--- VARIANT COMPLETED ---")
     return END
 
 
 def router_after_reporter(state: AgentState) -> str:
-    """Routes after the reporter model generates a response."""
     messages = state["messages"]
     last_message = messages[-1]
-
     if last_message.tool_calls:
         print(f"--- REPORTER ROUTING TO TOOLS: {last_message.tool_calls} ---")
         return "tools"
-
     print("--- REPORTER COMPLETED ---")
     return END
 
@@ -246,7 +290,11 @@ builder = StateGraph(AgentState)
 
 # Add Nodes
 builder.add_node("supervisor", supervisor_node)
-builder.add_node("tutor", tutor_node)
+builder.add_node("import", import_agent)
+builder.add_node("explain", explain_agent)
+builder.add_node("example", example_agent)
+builder.add_node("practice", practice_agent)
+builder.add_node("summary", summary_agent)
 builder.add_node("assessor", assessor_node)
 builder.add_node("planner", planner_node)
 builder.add_node("variant", variant_node)
@@ -260,16 +308,36 @@ builder.add_conditional_edges(
     "supervisor",
     router_after_supervisor,
     {
-        "tutor": "tutor",
+        "import": "import",
+        "explain": "explain",
+        "example": "example",
+        "practice": "practice",
+        "summary": "summary",
         "assessor": "assessor",
         "planner": "planner",
         "variant": "variant",
         "reporter": "reporter",
+        END: END,
     },
 )
 
+# IMPORT / SUMMARY → END (no assessment)
 builder.add_conditional_edges(
-    "tutor", router_after_tutor, {"tools": "tools", "assessor": "assessor"}
+    "import", _router_after_step, {"tools": "tools", END: END}
+)
+builder.add_conditional_edges(
+    "summary", _router_after_step, {"tools": "tools", END: END}
+)
+
+# EXPLAIN / EXAMPLE / PRACTICE → assessor
+builder.add_conditional_edges(
+    "explain", _router_after_step_with_assessor, {"tools": "tools", "assessor": "assessor", END: END}
+)
+builder.add_conditional_edges(
+    "example", _router_after_step_with_assessor, {"tools": "tools", "assessor": "assessor", END: END}
+)
+builder.add_conditional_edges(
+    "practice", _router_after_step_with_assessor, {"tools": "tools", "assessor": "assessor", END: END}
 )
 
 builder.add_conditional_edges(
@@ -292,7 +360,11 @@ builder.add_conditional_edges(
     "tools",
     router_after_tools,
     {
-        "tutor": "tutor",
+        "import": "import",
+        "explain": "explain",
+        "example": "example",
+        "practice": "practice",
+        "summary": "summary",
         "assessor": "assessor",
         "planner": "planner",
         "variant": "variant",
@@ -300,6 +372,5 @@ builder.add_conditional_edges(
     },
 )
 
-# Compile with a checkpointer for memory persistence
 memory = MemorySaver()
 treeedu_graph = builder.compile(checkpointer=memory)

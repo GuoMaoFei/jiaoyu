@@ -67,4 +67,7 @@ async def variant_node(state: AgentState):
         }
     )
 
+    from app.agent.state import strip_thinking_blocks
+    response = strip_thinking_blocks(response)
+
     return {"messages": [response]}

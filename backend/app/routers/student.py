@@ -194,8 +194,12 @@ async def get_bookshelf(student_id: str, db: AsyncSession = Depends(get_db)):
     node_counts = {row.material_id: row.node_count for row in node_count_result}
 
     books = []
+    from app.routers.materials import _processing_tasks
     for material in all_materials:
         act = activations.get(material.id)
+
+        task = _processing_tasks.get(material.id)
+        proc_status = task.get("status") if task else None
 
         books.append(
             BookshelfItemResponse(
@@ -209,6 +213,7 @@ async def get_bookshelf(student_id: str, db: AsyncSession = Depends(get_db)):
                 health_score=act.current_health_score or 0 if act else 0,
                 activated_at=act.activated_at if act else None,
                 is_activated=act is not None,
+                processing_status=proc_status,
             )
         )
 

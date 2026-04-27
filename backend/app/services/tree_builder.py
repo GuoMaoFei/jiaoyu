@@ -2,14 +2,104 @@ import os
 import json
 import requests
 import asyncio
+import logging
 from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime, timedelta
 from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from app.config import get_settings
 from app.models.material import Material, KnowledgeNode
+from app.services.pdf_text_extractor import PdfTextExtractor
+
+logger = logging.getLogger(__name__)
+
+
+# ── Sentinel returned by build_catalog_from_pageindex when structure is too
+#    sparse but toc_text is available — caller should use extract_catalog_from_text.
+_NEED_TOC_TEXT_PARSE = object()
+
+
+def build_catalog_from_pageindex(
+    tree_result: Dict[str, Any],
+    page_list: List[Tuple[str, int]],
+) -> list:
+    """从 PageIndex 结果复用构建 catalog_tree，零 LLM 调用。
+
+    Args:
+        tree_result: page_index_main 的返回结果（dict）
+        page_list: 缓存的逐页文本 [(text, tokens), ...]
+
+    Returns:
+        catalog_tree: 层级目录树 [{title, page, children}, ...]
+        若 structure 节点数 < 5 但有 toc_text，返回 _NEED_TOC_TEXT_PARSE 标记
+        否则返回空列表
+    """
+    if not isinstance(tree_result, dict):
+        return []
+
+    structure = tree_result.get("structure", [])
+    if not isinstance(structure, list):
+        return []
+
+    # 递归将 PageIndex 节点转为 catalog 格式
+    def _convert_node(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not isinstance(node, dict):
+            return None
+        title = node.get("title", "")
+        physical_index = node.get("physical_index")
+        # PageIndex 子节点在 "nodes" 或 "children" 字段
+        children_raw = node.get("nodes", node.get("children", []))
+        children = []
+        for child in children_raw:
+            converted = _convert_node(child)
+            if converted is not None:
+                children.append(converted)
+        return {
+            "title": title,
+            "page": physical_index,
+            "children": children,
+        }
+
+    if len(structure) >= 5:
+        # 足够多的节点，直接递归构建
+        # Sort by physical_index to ensure correct order
+        structure_sorted = sorted(structure, key=lambda n: n.get("physical_index") or n.get("start_index") or 0)
+        catalog_tree = []
+        for node in structure_sorted:
+            converted = _convert_node(node)
+            if converted is not None:
+                catalog_tree.append(converted)
+        return catalog_tree
+
+    # 节点数 < 5，检查是否有 toc_text 可用
+    if len(structure) < 5:
+        toc_text = tree_result.get("toc_text")
+        if toc_text and isinstance(toc_text, str) and toc_text.strip():
+            return _NEED_TOC_TEXT_PARSE
+
+    return []
+
+
+def _clean_title(title: str) -> str:
+    """Clean abnormal spaces in titles extracted from PDF text.
+
+    PDF text extraction often inserts spaces between characters that
+    should be adjacent (e.g., "必 修" -> "必修", "语 文" -> "语文").
+    This function collapses such intra-word spaces while preserving
+    intentional word boundaries.
+    """
+    import re
+    # Collapse multiple spaces into one
+    cleaned = re.sub(r' {2,}', ' ', title)
+    # Remove spaces between CJK characters (Chinese/Japanese/Korean)
+    # CJK Unified Ideographs: U+4E00-U+9FFF
+    cleaned = re.sub(r'(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])', '', cleaned)
+    # Remove space between CJK char and CJK punctuation
+    cleaned = re.sub(r'(?<=[\u4e00-\u9fff])\s+(?=[\u3000-\u303f\uff00-\uffef])', '', cleaned)
+    cleaned = re.sub(r'(?<=[\u3000-\u303f\uff00-\uffef])\s+(?=[\u4e00-\u9fff])', '', cleaned)
+    return cleaned.strip()
 
 
 class TreeBuilderService:
@@ -154,14 +244,21 @@ class TreeBuilderService:
         self, material_id: str, pdf_url_or_path: str
     ) -> Dict[str, Any]:
         """
-        Main pipeline with caching:
-        1. Check OCR cache first (saves ~36 minutes)
-        2. Query material from DB.
-        3. Upload PDF to PageIndex or use cached data
-        4. Wait for tree generation.
-        5. Parse JSON tree and save as KNOWLEDGE_NODEs to DB mapping to material_id.
-        6. Save tree cache.
+        Main pipeline with unified text caching:
+        1. Use PdfTextExtractor to extract text from PDF and cache as txt files
+        2. Pass cached page_list to PageIndex (skip internal PDF extraction)
+        3. Extract catalog from cached page_list (rule-based first, LLM fallback)
+        4. Dual-tree mapping and save KnowledgeNodes to DB
         """
+        # Fix Windows GBK encoding issue with Unicode characters in PDF text
+        import sys as _sys
+        if _sys.platform == 'win32':
+            try:
+                _sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+                _sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
+
         # 1. Verify material exists
         result = await self.db.execute(
             select(Material).where(Material.id == material_id)
@@ -182,23 +279,18 @@ class TreeBuilderService:
         if not os.path.exists(local_pdf_path):
             raise FileNotFoundError(f"PDF file not found at {local_pdf_path}")
 
-        # --- CACHE CHECK (STEP 1) ---
-        print(f"\n[CACHE] Checking OCR cache for material {material_id}...")
-
-        page_list = None
-
-        # Try to load OCR cache
-        cached_pages = await self._load_page_cache(material_id)
-        if cached_pages:
-            print(
-                f"[CACHE] ✅ Found {len(cached_pages)} cached pages, will resume from next page"
-            )
-        else:
-            cached_pages = []
-            print(f"[CACHE] No OCR cache found, running EasyOCR from page 1...")
-
         try:
-            # 3. Process with Local PageIndex (skip if cache exists)
+            # ── STEP 1: 统一文本提取并缓存为 txt ──
+            print(f"\n[TEXT-EXTRACT] 开始统一文本提取 for material {material_id}...")
+            text_extractor = PdfTextExtractor()
+            loop = asyncio.get_event_loop()
+            page_list, text_cache_dir = await loop.run_in_executor(
+                None,
+                lambda: text_extractor.extract_and_cache(local_pdf_path, material_id),
+            )
+            print(f"[TEXT-EXTRACT] 提取完成: {len(page_list)} 页, 缓存到 {text_cache_dir}")
+
+            # ── STEP 2: PageIndex 树构建（传入 page_list，跳过内部 PDF 提取）──
             import uuid
             from pageindex.utils import ConfigLoader
             from pageindex.page_index import page_index_main
@@ -206,42 +298,19 @@ class TreeBuilderService:
             config_loader = ConfigLoader()
             opt = config_loader.load()
 
-            loop = asyncio.get_event_loop()
-
-            # Get PDF total pages for resume logic
-            import pymupdf
-
-            pdf_doc = pymupdf.open(local_pdf_path)
-            total_pdf_pages = len(pdf_doc)
-            pdf_doc.close()
-
-            # Calculate start page for resume
-            # When cached_count >= total_pdf_pages, all pages are cached and start_page > cached_count
-            # will trigger early return in get_page_tokens
-            cached_count = len(cached_pages) if cached_pages else 0
-            start_page = cached_count + 1 if cached_count < total_pdf_pages else total_pdf_pages + 1
-
-            # Create progress callback for per-page caching (sync version)
-            # Only create callback if we need to OCR more pages
-            progress_callback = None
-            if cached_count < total_pdf_pages:
-
-                def progress_callback(page_num, text, tokens):
-                    self._save_page_cache(material_id, page_num, text, tokens)
-
-            # Local PageIndex does synchronous blocking work internally
-            # Note: use_cache=True is needed so that cached_pages is actually used in get_page_tokens
             toc_cache_path = str(self._get_toc_cache_path(material_id))
+
+            # 传入 page_list，PageIndex 不再重新提取
             tree_result = await loop.run_in_executor(
                 None,
                 lambda: page_index_main(
                     local_pdf_path,
                     opt,
-                    progress_callback=progress_callback,
+                    progress_callback=None,
                     use_cache=True,
-                    page_list=None,
-                    start_page=start_page,
-                    cached_pages=cached_pages,
+                    page_list=page_list,  # 传入缓存的 page_list
+                    start_page=1,
+                    cached_pages=None,
                     toc_cache_path=toc_cache_path,
                 ),
             )
@@ -269,25 +338,80 @@ class TreeBuilderService:
             elif isinstance(structure, dict):
                 print(f"[DEBUG] tree_builder structure is dict with keys: {structure.keys()}")
 
-            # --- DUAL-TREE MAPPING INTEGRATION ---
-            from app.utils.vlm_catalog import extract_catalog_from_pdf, map_dual_tree
+            # ── STEP 3: 目录提取（优先 PageIndex 结果复用，fallback 到规则化/LLM/VLM）──
+            from app.utils.vlm_catalog import (
+                extract_catalog_from_pdf,
+                extract_catalog_from_text,
+                extract_catalog_from_page_list,
+                map_dual_tree,
+                map_dual_tree_rule_based,
+            )
 
-            # Opt 1: Extract real catalog via VLM
-            vlm_tree = await extract_catalog_from_pdf(local_pdf_path)
+            toc_text = tree_result.get("toc_text") if isinstance(tree_result, dict) else None
 
+            catalog_tree = []
+
+            # 3-0. 优先: 从 PageIndex 结果复用构建 catalog_tree（零 LLM 调用）
+            pi_catalog_result = build_catalog_from_pageindex(tree_result, page_list)
+            if pi_catalog_result is _NEED_TOC_TEXT_PARSE:
+                # structure 节点不足但有 toc_text，只执行 3b
+                print("[DUAL-TREE] PageIndex structure 节点不足，使用 toc_text 解析")
+                if toc_text:
+                    print(f"[DUAL-TREE] 从 toc_text 用 LLM 解析目录 ({len(toc_text)} chars)...")
+                    catalog_tree = await extract_catalog_from_text(toc_text)
+                    print(f"[DUAL-TREE] LLM 文本解析返回 {len(catalog_tree)} 根节点")
+            elif pi_catalog_result:
+                catalog_tree = pi_catalog_result
+                print(f"[DUAL-TREE] 从PageIndex结果构建catalog_tree成功: {len(catalog_tree)} 根节点")
+            else:
+                # PageIndex 复用失败，继续原有 fallback 逻辑
+                # 3a. 优先: 从缓存的 page_list 规则化解析
+                if not catalog_tree and page_list:
+                    print(f"[DUAL-TREE] 尝试从缓存 page_list 规则化解析目录...")
+                    catalog_tree = extract_catalog_from_page_list(page_list)
+                    if catalog_tree:
+                        print(f"[DUAL-TREE] 规则化解析成功: {len(catalog_tree)} 根节点")
+
+                # 3b. Fallback 1: 从 toc_text 用 LLM 解析
+                if not catalog_tree and toc_text:
+                    print(f"[DUAL-TREE] Fallback: 从 toc_text 用 LLM 解析目录 ({len(toc_text)} chars)...")
+                    catalog_tree = await extract_catalog_from_text(toc_text)
+                    print(f"[DUAL-TREE] LLM 文本解析返回 {len(catalog_tree)} 根节点")
+
+                # 3c. Fallback 2: VLM 图片提取（传入 page_list 优先规则化）
+                if not catalog_tree:
+                    print("[DUAL-TREE] Fallback: VLM 目录提取...")
+                    catalog_tree = await extract_catalog_from_pdf(
+                        local_pdf_path, page_list=page_list
+                    )
+                    print(f"[DUAL-TREE] VLM 目录提取返回 {len(catalog_tree)} 根节点")
+
+            # ── STEP 3.5: 双树映射（优先规则化，fallback 到 LLM）──
             mapped_tree = []
-            use_vlm_tree = False
+            use_catalog_tree = False
 
-            if vlm_tree and len(vlm_tree) > 0:
-                # Opt 2: Map the raw tree to the VLM Tree
-                mapped_tree = await map_dual_tree(vlm_tree, structure)
-                if mapped_tree:
-                    use_vlm_tree = True
+            if catalog_tree and len(catalog_tree) > 0:
+                # 优先尝试规则化映射
+                rule_mapped, rule_coverage = map_dual_tree_rule_based(
+                    catalog_tree, structure
+                )
+                if rule_coverage >= 0.8:
+                    mapped_tree = rule_mapped
+                    use_catalog_tree = True
+                    print(f"[DUAL-TREE] 规则化映射成功，覆盖率: {rule_coverage:.0%}")
+                else:
+                    # 规则化覆盖率不足，fallback 到 LLM
+                    print(f"[DUAL-TREE] 规则化映射覆盖率不足 ({rule_coverage:.0%})，fallback到LLM")
+                    mapped_tree = await map_dual_tree(catalog_tree, structure)
+                    if mapped_tree:
+                        use_catalog_tree = True
 
-            # 6. Parse and Save to Database
-            if use_vlm_tree:
+            # ── STEP 4: 保存到数据库 ──
+            if use_catalog_tree:
                 pi_map = {}
                 self._flatten_pi_structure(structure, pi_map)
+                # Sort top-level nodes by page number to ensure correct unit order
+                mapped_tree.sort(key=lambda n: n.get("page") or 0)
                 for i, root_node in enumerate(mapped_tree, 1):
                     await self._parse_and_save_vlm_tree(
                         material_id,
@@ -300,6 +424,8 @@ class TreeBuilderService:
             else:
                 # Fallback to the raw PageIndex tree
                 if isinstance(structure, list):
+                    # Sort top-level nodes by physical_index to ensure correct order
+                    structure.sort(key=lambda n: n.get("physical_index") or n.get("start_index") or 0)
                     for i, root_node in enumerate(structure, 1):
                         await self._parse_and_save_tree(
                             material_id, root_node, parent_db_id=None, level=1, seq=i
@@ -312,10 +438,22 @@ class TreeBuilderService:
             # Commit the transaction
             await self.db.commit()
 
+            from app.agent.tools.pageindex_tools import invalidate_candidate_cache
+            invalidate_candidate_cache(material_id)
+
+            # Count nodes for reporting
+            node_count_result = await self.db.execute(
+                select(func.count(KnowledgeNode.id)).where(
+                    KnowledgeNode.material_id == material_id
+                )
+            )
+            node_count = node_count_result.scalar() or 0
+
             return {
                 "status": "success",
                 "message": f"Successfully built knowledge tree for material {material_id}.",
                 "doc_id": doc_id,
+                "node_count": node_count,
             }
 
         finally:
@@ -337,7 +475,8 @@ class TreeBuilderService:
             if node_id:
                 result_map[node_id] = structure
 
-            for child in structure.get("children", []):
+            children = structure.get("nodes", structure.get("children", []))
+            for child in children:
                 self._flatten_pi_structure(child, result_map)
 
     async def _parse_and_save_tree(
@@ -355,13 +494,13 @@ class TreeBuilderService:
 
         # Extract features
         pi_node_id = node_data.get("node_id")
-        title = node_data.get("title", f"Node {pi_node_id}")
+        title = _clean_title(node_data.get("title", f"Node {pi_node_id}"))
         summary = node_data.get("summary", "")
         text_content = node_data.get("text", "")
 
         # Build structure-only payload for the JSON field
         pi_index_node = {
-            k: v for k, v in node_data.items() if k not in ("text", "children")
+            k: v for k, v in node_data.items() if k not in ("text", "children", "nodes")
         }
 
         # Create ORM object for the structural node
@@ -392,8 +531,9 @@ class TreeBuilderService:
             )
             self.db.add(new_content)
 
-        # Recursively process children
-        children = node_data.get("children", [])
+        # Recursively process children (sorted by physical_index / start_index)
+        children = node_data.get("nodes", node_data.get("children", []))
+        children.sort(key=lambda c: c.get("physical_index") or c.get("start_index") or 0)
         for i, child in enumerate(children, 1):
             await self._parse_and_save_tree(
                 material_id=material_id,
@@ -417,7 +557,7 @@ class TreeBuilderService:
         """
         from app.models.material import KnowledgeContent
 
-        title = node_data.get("title", f"Node L{level}-{seq}")
+        title = _clean_title(node_data.get("title", f"Node L{level}-{seq}"))
         mapped_nodes = node_data.get("mapped_pi_nodes", [])
         page = node_data.get("page")
 
@@ -426,7 +566,7 @@ class TreeBuilderService:
             if pi_id in pi_map:
                 pi_data = pi_map[pi_id]
                 pi_index_node = {
-                    k: v for k, v in pi_data.items() if k not in ("children")
+                    k: v for k, v in pi_data.items() if k not in ("children", "nodes")
                 }
                 pi_nodes_list.append(pi_index_node)
 
@@ -474,8 +614,9 @@ class TreeBuilderService:
                     )
                     self.db.add(new_content)
 
-        # Recursively process children
+        # Recursively process children (sorted by page number)
         children = node_data.get("children", [])
+        children.sort(key=lambda c: c.get("page") or 0)
         for i, child in enumerate(children, 1):
             await self._parse_and_save_vlm_tree(
                 material_id=material_id,

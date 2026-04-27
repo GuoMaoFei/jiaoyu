@@ -26,6 +26,40 @@ from sqlalchemy import select, func
 
 logger = logging.getLogger(__name__)
 
+
+def _extract_text_from_message(msg) -> str:
+    """Extract text content from a message, filtering out thinking blocks (MiniMax)."""
+    content = msg.content
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text" and block.get("text"):
+                    parts.append(block["text"])
+            elif hasattr(block, "type") and block.type == "text" and block.text:
+                parts.append(block.text)
+        return "".join(parts)
+    return str(content) if content else ""
+
+
+def _extract_text_from_chunk(chunk) -> str:
+    """Extract text from a streaming chunk, filtering out thinking blocks."""
+    content = chunk.content
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                if block.get("type") == "text" and block.get("text"):
+                    parts.append(block["text"])
+            elif hasattr(block, "type") and block.type == "text" and block.text:
+                parts.append(block.text)
+        return "".join(parts)
+    return ""
+
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 
 
@@ -73,10 +107,12 @@ async def send_message(request: ChatMessageRequest, db: AsyncSession = Depends(g
         "material_id": request.material_id,
         "node_id": request.node_id,
         "lesson_step": request.lesson_step,
+        "subject": None,  # 由 supervisor 从 material_id 派生
+        "current_intent": request.intent or "chat",
         "messages": [HumanMessage(content=request.message)],
     }
 
-    config = {"configurable": {"thread_id": session_id}}
+    config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
     # Collect the final response by streaming through all nodes
     final_content = ""
@@ -91,9 +127,8 @@ async def send_message(request: ChatMessageRequest, db: AsyncSession = Depends(g
                         for tc in last_msg.tool_calls:
                             tool_calls_made.append(tc.get("name", "unknown"))
                     elif hasattr(last_msg, "content") and last_msg.content:
-                        # Keep track of the last non-empty content (final answer)
-                        if node_name in ("tutor", "assessor"):
-                            final_content = last_msg.content
+                        if node_name != "assessor":
+                            final_content = _extract_text_from_message(last_msg)
     except Exception as e:
         logger.exception(f"Agent pipeline error: {e}")
         raise HTTPException(status_code=500, detail=f"Agent processing error: {str(e)}")
@@ -202,67 +237,118 @@ async def stream_message(
         "material_id": request.material_id,
         "node_id": request.node_id,
         "lesson_step": request.lesson_step,
+        "subject": None,  # 由 supervisor 从 material_id 派生
         "current_intent": request.intent or "chat",
         "messages": [HumanMessage(content=request.message)],
     }
-    config = {"configurable": {"thread_id": session_id}}
+    config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
     import asyncio
 
     async def event_generator():
-        final_content = ""
-        tool_calls_made = []
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def _run_agent():
+            """Run LangGraph pipeline with token-level streaming via astream_events."""
+            final_content = ""
+            seen_nodes = set()
+            try:
+                async for event in treeedu_graph.astream_events(
+                    agent_input, config=config, version="v2"
+                ):
+                    event_type = event.get("event", "")
+                    data = event.get("data", {})
+                    metadata = event.get("metadata", {})
+                    node_name = metadata.get("langgraph_node", "")
+
+                    if node_name and node_name not in seen_nodes:
+                        seen_nodes.add(node_name)
+                        await queue.put({"type": "node", "node": node_name})
+
+                    if event_type == "on_chat_model_stream":
+                        if node_name in ("import", "explain", "example", "practice", "summary"):
+                            chunk = data.get("chunk")
+                            if chunk and hasattr(chunk, "content"):
+                                text = _extract_text_from_chunk(chunk)
+                                if text:
+                                    await queue.put({
+                                        "type": "token",
+                                        "content": text,
+                                        "role": node_name.upper(),
+                                    })
+
+                    if event_type == "on_tool_start":
+                        tool_name = event.get("name", "unknown")
+                        await queue.put({
+                            "type": "tool",
+                            "tool": tool_name,
+                            "node": node_name,
+                        })
+
+                    if event_type == "on_chain_end" and node_name in ("import", "explain", "example", "practice", "summary"):
+                        output = data.get("output", {})
+                        if isinstance(output, dict) and "messages" in output:
+                            msgs = output["messages"]
+                            if msgs:
+                                last = msgs[-1]
+                                if hasattr(last, "content") and not getattr(last, "tool_calls", None):
+                                    final_content = _extract_text_from_message(last)
+
+                await queue.put({"type": "_done", "final_content": final_content})
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.exception(f"Agent background task error: {e}")
+                await queue.put({"type": "_error", "error": str(e)})
+            finally:
+                if final_content:
+                    try:
+                        from app.database import AsyncSessionLocal
+                        async with AsyncSessionLocal() as bg_db:
+                            bg_db.add(ChatMessage(
+                                session_id=session_id,
+                                sender=SenderRole.TUTOR_AGENT,
+                                content_md=final_content,
+                            ))
+                            await bg_db.commit()
+                    except Exception:
+                        logger.exception("Failed to save agent response in background")
+
+        agent_task = asyncio.create_task(_run_agent())
 
         try:
-            stream = treeedu_graph.astream(agent_input, config=config)
+            yield ": connected\n\n"
+
             while True:
                 try:
-                    event = await asyncio.wait_for(stream.__anext__(), timeout=15.0)
+                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
                 except asyncio.TimeoutError:
                     yield ": keep-alive\n\n"
                     continue
-                except StopAsyncIteration:
+
+                if item["type"] == "_done":
                     break
+                if item["type"] == "_error":
+                    yield f"event: error\ndata: {json.dumps({'error': item['error']})}\n\n"
+                    break
+                if item["type"] == "node":
+                    yield f"event: node\ndata: {json.dumps({'node': item['node']})}\n\n"
+                elif item["type"] == "tool":
+                    yield f"event: tool\ndata: {json.dumps({'tool': item['tool'], 'node': item['node']})}\n\n"
+                elif item["type"] == "token":
+                    yield f"event: token\ndata: {json.dumps({'content': item['content'], 'role': item['role']})}\n\n"
 
-                for node_name, values in event.items():
-                    # Emit node event
-                    yield f"event: node\ndata: {json.dumps({'node': node_name})}\n\n"
+            yield f"event: done\ndata: {json.dumps({'session_id': session_id})}\n\n"
 
-                    if "messages" in values:
-                        last_msg = values["messages"][-1]
-                        if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
-                            for tc in last_msg.tool_calls:
-                                tool_name = tc.get("name", "unknown")
-                                tool_calls_made.append(tool_name)
-                                yield f"event: tool\ndata: {json.dumps({'tool': tool_name, 'node': node_name})}\n\n"
-                        elif hasattr(last_msg, "content") and last_msg.content:
-                            if node_name in ("tutor", "assessor"):
-                                final_content = last_msg.content
-                                yield f"event: token\ndata: {json.dumps({'content': last_msg.content, 'role': node_name.upper()})}\n\n"
-
-            # Save agent response to DB
-            if final_content:
-                agent_msg = ChatMessage(
-                    session_id=session_id,
-                    sender=SenderRole.TUTOR_AGENT,
-                    content_md=final_content,
-                )
-                db.add(agent_msg)
-                await db.commit()
-
-            # Emit done event
-            yield f"event: done\ndata: {json.dumps({'session_id': session_id, 'tool_calls': tool_calls_made})}\n\n"
-
-        except Exception as e:
-            logger.exception(f"SSE stream error: {e}")
-            yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+        except asyncio.CancelledError:
+            agent_task.cancel()
+            logger.info(f"SSE stream cancelled by client for session {session_id}, agent task cancelled")
 
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
     )

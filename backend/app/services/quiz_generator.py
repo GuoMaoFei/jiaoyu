@@ -109,7 +109,7 @@ async def analyze_quiz_config(
 """
 
     try:
-        response = model.invoke([SystemMessage(content=prompt)])
+        response = await model.ainvoke([SystemMessage(content=prompt)])
         content = response.content
 
         if "```json" in content:
@@ -199,7 +199,7 @@ async def generate_quiz_questions(
 """
 
     try:
-        response = model.invoke([SystemMessage(content=prompt)])
+        response = await model.ainvoke([SystemMessage(content=prompt)])
         content = response.content
 
         if "```json" in content:
@@ -390,14 +390,14 @@ async def grade_quiz(
 返回 JSON：{{"is_correct": true/false}}
 """
             try:
-                resp = model.invoke([SystemMessage(content=prompt)])
+                resp = await model.ainvoke([SystemMessage(content=prompt)])
                 content = resp.content
                 if "```json" in content:
                     content = content.split("```json")[1].split("```")[0]
                 data = json.loads(content.strip())
                 is_correct = data.get("is_correct", False)
-            except:
-                is_correct = len(student_answer.strip()) > 10
+            except Exception:
+                is_correct = False
 
         if is_correct:
             correct_count += 1

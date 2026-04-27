@@ -19,6 +19,17 @@ export interface KnowledgeTreeResponse {
     total_nodes: number;
 }
 
+/** 知识点 — 对应后端 KnowledgePoint */
+export interface KnowledgePoint {
+    id: string;
+    title: string;
+    summary?: string | null;
+    keywords?: string | null;
+    level: number;
+    source_count: number;
+    children?: KnowledgePoint[];
+}
+
 /** 教材 — 对应后端 MaterialResponse */
 export interface Material {
     id: string;

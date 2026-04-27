@@ -29,6 +29,7 @@ export interface BookshelfItem {
     health_score: number;
     activated_at?: string;
     is_activated: boolean;
+    processing_status?: string;  // pending | processing | completed | failed | none
 }
 
 /** 书架响应 */

@@ -150,7 +150,7 @@ async def tutor_node(state: AgentState):
     tools = [search_knowledge_tree]
     model_with_tools = model.bind_tools(tools)
 
-    model_name = getattr(model, "model_name", "unknown")
+    model_name = getattr(model, "model_name", None) or getattr(model, "model", "unknown")
     print(
         f"--- [MODEL SELECTION] Step: {lesson_step}, Model: {model_name}, Temperature: {temperature} ---"
     )
@@ -187,7 +187,7 @@ async def tutor_node(state: AgentState):
 
     response = await chain.ainvoke(invoke_args)
 
-    # Note: If `response.tool_calls` is present, the Supervisor/Graph needs to route to the tool executor node.
-    # Otherwise, this is a final answer message that gets appended to the state.
+    from app.agent.state import strip_thinking_blocks
+    response = strip_thinking_blocks(response)
 
     return {"messages": [response]}

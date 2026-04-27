@@ -93,6 +93,8 @@ async def planner_node(state: AgentState):
                 "weakness_summary": tutor_ctx.get("historical_mistakes", "暂无"),
             }
         )
+        from app.agent.state import strip_thinking_blocks
+        response = strip_thinking_blocks(response)
         return {"messages": [response]}
     except Exception as e:
         print(f"--- PLANNER ERROR: {e} ---")

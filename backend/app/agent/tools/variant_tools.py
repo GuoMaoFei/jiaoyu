@@ -61,7 +61,7 @@ async def save_variant_question(
         try:
             question = Question(
                 node_id=node_id,
-                source_type=QuestionSourceType.AI_GENERATED,
+                source_type=QuestionSourceType.VARIANT_GENERATED,
                 content_md=question_content,
                 answer_md=answer_content,
                 difficulty=difficulty,

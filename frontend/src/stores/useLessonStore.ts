@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { type LessonStep, type LessonStatusResponse } from '../types/lesson';
+import { type LessonStep, type LessonStatusResponse, type KnowledgePointBrief } from '../types/lesson';
 
 interface LessonStoreState {
     lessonId: string | null;
@@ -9,6 +9,7 @@ interface LessonStoreState {
     isCompleted: boolean;
     nodeTitle: string | null;
     stepPrompt: string | null;
+    knowledgePoints: KnowledgePointBrief[] | null;
     setLesson: (res: LessonStatusResponse) => void;
     reset: () => void;
 }
@@ -21,6 +22,7 @@ export const useLessonStore = create<LessonStoreState>((set) => ({
     isCompleted: false,
     nodeTitle: null,
     stepPrompt: null,
+    knowledgePoints: null,
     setLesson: (res) =>
         set({
             lessonId: res.lesson_id,
@@ -30,6 +32,7 @@ export const useLessonStore = create<LessonStoreState>((set) => ({
             isCompleted: res.is_completed,
             nodeTitle: res.node_title || null,
             stepPrompt: res.step_prompt || null,
+            knowledgePoints: res.knowledge_points || null,
         }),
     reset: () =>
         set({
@@ -40,5 +43,6 @@ export const useLessonStore = create<LessonStoreState>((set) => ({
             isCompleted: false,
             nodeTitle: null,
             stepPrompt: null,
+            knowledgePoints: null,
         }),
 }));

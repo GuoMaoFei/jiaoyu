@@ -17,7 +17,7 @@ export function useSSE(endpoint: string) {
     const startStream = useCallback(async (body: any, options?: SSEOptions) => {
         const token = useAuthStore.getState().token;
 
-        // 中断前一个请求
+        // Abort previous request
         if (controllerRef.current) {
             controllerRef.current.abort();
         }
@@ -38,7 +38,7 @@ export function useSSE(endpoint: string) {
                 async onopen(response) {
                     if (response.ok) {
                         options?.onOpen?.();
-                        return; // 一切正常
+                        return;
                     }
                     if (response.status === 401) {
                         useAuthStore.getState().logout();
@@ -60,7 +60,6 @@ export function useSSE(endpoint: string) {
                 onerror(err) {
                     setIsStreaming(false);
                     options?.onError?.(err);
-                    // 抛出异常以停止重试机制
                     throw err;
                 }
             });

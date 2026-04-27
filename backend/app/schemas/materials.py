@@ -25,6 +25,13 @@ class TreeBuildRequest(BaseModel):
 
 # === Response Models ===
 
+class KnowledgePointBrief(BaseModel):
+    """Brief knowledge point info attached to a node."""
+    id: str
+    title: str
+    level: int
+
+
 class KnowledgeNodeResponse(BaseModel):
     """A single knowledge tree node."""
     id: str
@@ -34,6 +41,7 @@ class KnowledgeNodeResponse(BaseModel):
     parent_id: Optional[str] = None
     content_preview: Optional[str] = Field(None, description="First 200 chars of content")
     children_count: int = 0
+    knowledge_points: Optional[List[KnowledgePointBrief]] = None
 
 
 class MaterialResponse(BaseModel):

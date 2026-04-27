@@ -3,8 +3,15 @@ Lesson Schemas - Pydantic models for guided learning API
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
+
+
+class KnowledgePointBrief(BaseModel):
+    id: str
+    title: str
+    level: int = 1
+    summary: str = ""
 
 
 class LessonStartRequest(BaseModel):
@@ -35,6 +42,7 @@ class LessonStatusResponse(BaseModel):
     step_prompt: Optional[str] = None
     message: Optional[str] = None
     error: Optional[str] = None
+    knowledge_points: Optional[List[KnowledgePointBrief]] = None
 
 
 class PlanGenerateRequest(BaseModel):

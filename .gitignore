@@ -167,3 +167,7 @@ cython_debug/
 .skills/
 skills-lock.json
 *skills
+test_output/kps.json
+test_output/parse_result.json
+nul
+kps.json

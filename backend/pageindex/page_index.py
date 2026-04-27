@@ -9,7 +9,10 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-################### check title in page #########################################################
+from .rule_based import find_toc_pages_rule_based, detect_page_index_rule_based, check_title_in_start_rule_based
+
+
+################### check title in page ########################################
 async def check_title_appearance(item, page_list, start_index=1, opt=None):
     title = item["title"]
     if "physical_index" not in item or item["physical_index"] is None:
@@ -105,8 +108,27 @@ async def check_title_appearance_in_start_concurrent(
     # only for items with valid physical_index
     tasks = []
     valid_items = []
-    for item in structure:
-        if item.get("physical_index") is not None:
+
+    # 2.6: Rule-based title check shortcut
+    if getattr(opt, 'rule_based_title_check', False):
+        need_llm = []
+        for item in structure:
+            if item.get("physical_index") is not None:
+                page_text = page_list[item["physical_index"] - 1][0]
+                rule_result = check_title_in_start_rule_based(item["title"], page_text)
+                if rule_result is not None:
+                    item["appear_start"] = rule_result
+                    print(f"[RULE-BASED] check_title_in_start: rule hit for '{item['title']}', result={rule_result}")
+                    get_llm_tracker().record_rule_hit("check_title_in_start")
+                else:
+                    need_llm.append(item)
+                    get_llm_tracker().record_rule_miss("check_title_in_start")
+            # items with physical_index=None already have appear_start="no" set above
+
+        print(f"[RULE-BASED] check_title_in_start: {len(structure) - len(need_llm) - sum(1 for i in structure if i.get('physical_index') is None)} resolved by rule, {len(need_llm)} need LLM")
+
+        # Only call LLM for items that rule-based couldn't determine
+        for item in need_llm:
             page_text = page_list[item["physical_index"] - 1][0]
             tasks.append(
                 check_title_appearance_in_start(
@@ -114,6 +136,17 @@ async def check_title_appearance_in_start_concurrent(
                 )
             )
             valid_items.append(item)
+    else:
+        # Original logic: call LLM for all items with valid physical_index
+        for item in structure:
+            if item.get("physical_index") is not None:
+                page_text = page_list[item["physical_index"] - 1][0]
+                tasks.append(
+                    check_title_appearance_in_start(
+                        item["title"], page_text, opt=opt, logger=logger
+                    )
+                )
+                valid_items.append(item)
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for item, result in zip(valid_items, results):
@@ -267,6 +300,18 @@ def extract_toc_content(content, opt=None):
 
 def detect_page_index(toc_content, opt=None):
     print("start detect_page_index")
+
+    # 2.2: Rule-based page index detection shortcut
+    if getattr(opt, 'rule_based_page_index_detect', False):
+        rule_result = detect_page_index_rule_based(toc_content)
+        if rule_result != "unknown":
+            print(f"[RULE-BASED] detect_page_index: rule hit, result={rule_result}")
+            get_llm_tracker().record_rule_hit("detect_page_index")
+            return rule_result
+        else:
+            print("[RULE-BASED] detect_page_index: rule miss (unknown), falling back to LLM")
+            get_llm_tracker().record_rule_miss("detect_page_index")
+
     prompt = f"""
     You will be given a table of contents.
 
@@ -342,11 +387,19 @@ def toc_index_extractor(toc, content, opt=None):
     task_params = get_task_params("toc_transform", opt)
     response = ChatGPT_API(model=model, prompt=prompt, task_params=task_params)
     json_content = extract_json(response)
+    if isinstance(json_content, dict):
+        for key in ("table_of_contents", "toc", "items", "entries"):
+            if key in json_content and isinstance(json_content[key], list):
+                return json_content[key]
     return json_content
 
 
 def toc_transformer(toc_content, opt=None):
     print("start toc_transformer")
+    skip_completeness_check = getattr(opt, 'skip_toc_completeness_check', False)
+    if skip_completeness_check:
+        print("[OPT] skip_toc_completeness_check=True, will skip completeness check LLM calls")
+
     init_prompt = """
     You are given a table of contents, You job is to transform the whole table of content into a JSON format included table_of_contents.
 
@@ -378,6 +431,38 @@ def toc_transformer(toc_content, opt=None):
     if isinstance(result, str) and result == "Error":
         raise Exception("LLM API failed after max retries")
     last_complete, finish_reason = result
+
+    # 2.3: When skip_toc_completeness_check is True, skip the completeness check LLM call
+    if skip_completeness_check and last_complete:
+        print(f"[OPT] Skipping completeness check (finish_reason={finish_reason}), directly parsing JSON")
+        print(f"[DEBUG] last_complete preview: {last_complete[:300]}...")
+        extracted = extract_json(last_complete)
+        if "table_of_contents" in extracted:
+            return convert_page_to_int(extracted["table_of_contents"])
+        # If JSON extraction failed, try the final_prompt retry path
+        print("[OPT] JSON extraction failed in skip-check path, trying retry prompt")
+        print(f"[DEBUG] toc_content length: {len(toc_content)}, last_complete length: {len(last_complete)}")
+        final_prompt = f"""
+Based on the raw table of contents, output the complete table of contents as JSON.
+Output ONLY this exact format, no thinking blocks:
+{{
+    "table_of_contents": [
+        {{"structure": "1.1", "title": "...", "page": 1}},
+        ...
+    ]
+}}
+
+Raw table of contents:
+{toc_content}
+
+Output the JSON:"""
+        retry_params = {**task_params, 'max_tokens': max(task_params.get('max_tokens', 4000), 16000)}
+        final_result = ChatGPT_API(model=model, prompt=final_prompt, task_params=retry_params)
+        final_json = extract_json(final_result)
+        if "table_of_contents" in final_json:
+            return convert_page_to_int(final_json["table_of_contents"])
+        raise Exception(f"Failed to extract table_of_contents after skip-check retry. Got: {final_result[:200]}")
+
     if_complete = check_if_toc_transformation_is_complete(
         toc_content, last_complete, opt
     )
@@ -432,6 +517,16 @@ Output the remaining JSON here:"""
         new_complete, finish_reason = result
         last_raw_response = new_complete
 
+        # 2.3: When skip_toc_completeness_check is True, after continuation just return
+        if skip_completeness_check:
+            print(f"[OPT] Skipping completeness check after continuation (finish_reason={finish_reason}), directly returning")
+            final_response = last_raw_response or last_complete
+            final_json = extract_json(final_response)
+            if "table_of_contents" in final_json:
+                return convert_page_to_int(final_json["table_of_contents"])
+            # If extraction failed, break out of loop
+            break
+
         if_complete = check_if_toc_transformation_is_complete(
             toc_content, new_complete, opt
         )
@@ -469,6 +564,18 @@ Output the JSON:"""
 
 def find_toc_pages(start_page_index, page_list, opt, logger=None):
     print("start find_toc_pages")
+
+    # 2.1: Rule-based TOC page detection shortcut
+    if getattr(opt, 'rule_based_toc_detect', False):
+        rule_result = find_toc_pages_rule_based(page_list)
+        if rule_result:
+            print(f"[RULE-BASED] find_toc_pages: rule hit, detected {len(rule_result)} TOC pages -> {rule_result}")
+            get_llm_tracker().record_rule_hit("find_toc_pages")
+            return rule_result
+        else:
+            print("[RULE-BASED] find_toc_pages: rule miss, falling back to LLM")
+            get_llm_tracker().record_rule_miss("find_toc_pages")
+
     last_page_is_yes = False
     toc_page_list = []
     i = start_page_index
@@ -507,7 +614,19 @@ def remove_page_number(data):
     return data
 
 
+def _ensure_list(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("table_of_contents", "toc", "items", "entries"):
+            if key in data and isinstance(data[key], list):
+                return data[key]
+    return []
+
+
 def extract_matching_page_pairs(toc_page, toc_physical_index, start_page_index):
+    toc_page = _ensure_list(toc_page)
+    toc_physical_index = _ensure_list(toc_physical_index)
     pairs = []
     print(f"[DEBUG] extract_matching_page_pairs: toc_page has {len(toc_page)} items")
     print(f"[DEBUG] toc_page titles: {[item.get('title') for item in toc_page[:5]]}")
@@ -640,6 +759,15 @@ def add_page_number_to_toc(part, structure, opt=None):
     task_params = get_task_params("toc_transform", opt)
     current_json_raw = ChatGPT_API(model=model, prompt=prompt, task_params=task_params)
     json_result = extract_json(current_json_raw)
+    if isinstance(json_result, dict):
+        for key in ("table_of_contents", "toc", "items", "entries", "result"):
+            if key in json_result and isinstance(json_result[key], list):
+                json_result = json_result[key]
+                break
+        else:
+            json_result = []
+    if not isinstance(json_result, list):
+        json_result = []
 
     for item in json_result:
         if "start" in item:
@@ -1076,15 +1204,19 @@ def process_none_page_numbers(toc_items, page_list, start_index=1, opt=None):
     for i, item in enumerate(toc_items):
         if "physical_index" not in item:
             prev_physical_index = 0
+            prev_page_number = None
             for j in range(i - 1, -1, -1):
                 if toc_items[j].get("physical_index") is not None:
                     prev_physical_index = toc_items[j]["physical_index"]
+                    prev_page_number = toc_items[j].get("page")
                     break
 
             next_physical_index = -1
+            next_page_number = None
             for j in range(i + 1, len(toc_items)):
                 if toc_items[j].get("physical_index") is not None:
                     next_physical_index = toc_items[j]["physical_index"]
+                    next_page_number = toc_items[j].get("page")
                     break
 
             page_contents = []
@@ -1097,17 +1229,70 @@ def process_none_page_numbers(toc_items, page_list, start_index=1, opt=None):
                     continue
 
             item_copy = copy.deepcopy(item)
-            del item_copy["page"]
-            result = add_page_number_to_toc(page_contents, item_copy, opt)
-            if isinstance(result[0]["physical_index"], str) and result[0][
-                "physical_index"
-            ].startswith("<physical_index"):
-                item["physical_index"] = int(
-                    result[0]["physical_index"].split("_")[-1].rstrip(">").strip()
+            if "page" in item_copy:
+                del item_copy["page"]
+            try:
+                result = add_page_number_to_toc(page_contents, item_copy, opt)
+            except Exception as e:
+                print(f"[WARN] add_page_number_to_toc failed: {e}")
+                result = None
+            if result and isinstance(result, list) and len(result) > 0:
+                if isinstance(result[0]["physical_index"], str) and result[0][
+                    "physical_index"
+                ].startswith("<physical_index"):
+                    item["physical_index"] = int(
+                        result[0]["physical_index"].split("_")[-1].rstrip(">").strip()
+                    )
+                    if "page" in item:
+                        del item["page"]
+                    continue
+
+            if "physical_index" not in item and item.get("page") is not None:
+                interpolated = _interpolate_physical_index(
+                    i, item, toc_items, prev_physical_index, prev_page_number,
+                    next_physical_index, next_page_number, start_index, len(page_list),
                 )
-                del item["page"]
+                if interpolated is not None:
+                    item["physical_index"] = interpolated
+                    if "page" in item:
+                        del item["page"]
 
     return toc_items
+
+
+def _interpolate_physical_index(
+    idx, item, toc_items, prev_pi, prev_page, next_pi, next_page, start_index, total_pages,
+):
+    printed_page = item.get("page")
+    if printed_page is None:
+        if prev_pi > 0 and next_pi > 0:
+            return prev_pi + 1
+        return None
+
+    if prev_page is not None and prev_pi > 0:
+        offset = prev_pi - prev_page
+        candidate = printed_page + offset
+        if start_index <= candidate <= start_index + total_pages - 1:
+            print(f"[INTERPOLATE] Item '{item.get('title', '?')}' pi={candidate} (offset={offset} from prev)")
+            return candidate
+
+    if next_page is not None and next_pi > 0:
+        offset = next_pi - next_page
+        candidate = printed_page + offset
+        if start_index <= candidate <= start_index + total_pages - 1:
+            print(f"[INTERPOLATE] Item '{item.get('title', '?')}' pi={candidate} (offset={offset} from next)")
+            return candidate
+
+    if prev_pi > 0 and next_pi > 0:
+        gap = next_pi - prev_pi
+        items_in_gap = sum(
+            1 for j in range(idx - 1, idx + 2)
+            if 0 <= j < len(toc_items) and "physical_index" not in toc_items[j]
+        )
+        if gap > items_in_gap:
+            return prev_pi + max(1, gap // (items_in_gap + 1))
+
+    return None
 
 
 def check_toc(page_list, opt=None):
@@ -1325,14 +1510,20 @@ async def fix_incorrect_toc_with_retries(
     page_list,
     incorrect_results,
     start_index=1,
-    max_attempts=3,
+    max_attempts=None,
     opt=None,
     logger=None,
 ):
+    # 2.5: Default max_attempts from opt.fix_max_attempts (default 2) instead of hardcoded 3
+    if max_attempts is None:
+        max_attempts = getattr(opt, 'fix_max_attempts', 2) if opt else 2
+        print(f"[OPT] fix_max_attempts from opt: {max_attempts}")
+
     print("start fix_incorrect_toc")
     fix_attempt = 0
     current_toc = toc_with_page_number
     current_incorrect = incorrect_results
+    prev_incorrect_count = len(current_incorrect) if current_incorrect else 0
 
     while current_incorrect:
         print(f"Fixing {len(current_incorrect)} incorrect results")
@@ -1342,6 +1533,14 @@ async def fix_incorrect_toc_with_retries(
         )
 
         fix_attempt += 1
+
+        # 2.5: Stop retrying if error count is not decreasing
+        current_incorrect_count = len(current_incorrect) if current_incorrect else 0
+        if current_incorrect_count >= prev_incorrect_count:
+            print(f"[OPT] Stopping retries: incorrect count not decreasing ({current_incorrect_count} >= {prev_incorrect_count})")
+            break
+        prev_incorrect_count = current_incorrect_count
+
         if fix_attempt >= max_attempts:
             logger.info("Maximum fix attempts reached")
             break
@@ -1352,6 +1551,12 @@ async def fix_incorrect_toc_with_retries(
 ################### verify toc #########################################################
 async def verify_toc(page_list, list_result, start_index=1, N=None, opt=None):
     print("start verify_toc")
+
+    # 2.4: Default N from opt.verify_sample_size (default 5) instead of None (full verification)
+    if N is None and opt is not None:
+        N = getattr(opt, 'verify_sample_size', 5)
+        print(f"[OPT] verify_sample_size from opt: {N}")
+
     # Find the last non-None physical_index
     last_physical_index = None
     for item in reversed(list_result):
@@ -1464,7 +1669,6 @@ async def meta_processor(
             page_list,
             incorrect_results,
             start_index=start_index,
-            max_attempts=3,
             opt=opt,
             logger=logger,
         )
@@ -1564,6 +1768,7 @@ async def process_large_node_recursively(node, page_list, opt=None, logger=None)
 
 async def tree_parser(page_list, opt, doc=None, logger=None, toc_cache_path=None):
     is_scanned_pdf = False
+    toc_text_raw = None
     if isinstance(doc, str) and os.path.isfile(doc):
         from app.utils.vlm_catalog import detect_pdf_type
         print(f"[DEBUG] Calling detect_pdf_type with page_list length: {len(page_list)}")
@@ -1606,6 +1811,7 @@ async def tree_parser(page_list, opt, doc=None, logger=None, toc_cache_path=None
     else:
         check_toc_result = check_toc(page_list, opt)
         logger.info(check_toc_result)
+        toc_text_raw = check_toc_result.get("toc_content")
 
         if (
             check_toc_result.get("toc_content")
@@ -1652,7 +1858,7 @@ async def tree_parser(page_list, opt, doc=None, logger=None, toc_cache_path=None
     elif isinstance(toc_tree, dict):
         print(f"[DEBUG] tree_parser returning dict with keys: {toc_tree.keys()}")
 
-    return toc_tree
+    return {"structure": toc_tree, "toc_text": toc_text_raw}
 
 
 def page_index_main(
@@ -1705,7 +1911,13 @@ def page_index_main(
         print(f"model: {getattr(opt, 'model', 'NOT SET')}")
         print(f"model_profiles: {getattr(opt, 'model_profiles', 'NOT SET')}")
 
-        structure = await tree_parser(page_list, opt, doc=doc, logger=logger, toc_cache_path=toc_cache_path)
+        tree_result = await tree_parser(page_list, opt, doc=doc, logger=logger, toc_cache_path=toc_cache_path)
+        toc_text = None
+        if isinstance(tree_result, dict) and "structure" in tree_result:
+            toc_text = tree_result.get("toc_text")
+            structure = tree_result["structure"]
+        else:
+            structure = tree_result
         print(f"Tree structure type: {type(structure)}")
 
         if isinstance(structure, dict):
@@ -1722,8 +1934,8 @@ def page_index_main(
         if opt.if_add_node_summary == "yes":
             if opt.if_add_node_text == "no":
                 add_node_text(structure, page_list)
-            print("Calling generate_summaries_for_structure()")
-            await generate_summaries_for_structure(structure, opt=opt)
+            print("Calling generate_summaries_batch() (批量摘要生成)")
+            await generate_summaries_batch(structure, opt=opt, batch_size=getattr(opt, 'summary_batch_size', 6))
             if opt.if_add_node_text == "no":
                 print("Calling remove_structure_text()")
                 remove_structure_text(structure)
@@ -1735,6 +1947,7 @@ def page_index_main(
                 "doc_name": get_pdf_name(doc),
                 "doc_description": doc_description,
                 "structure": structure,
+                "toc_text": toc_text,
             }
         print(f"Final structure: type={type(structure)}")
         print(f"[DEBUG] page_index_main returning structure type: {type(structure)}")
@@ -1752,6 +1965,7 @@ def page_index_main(
         return {
             "doc_name": get_pdf_name(doc),
             "structure": structure,
+            "toc_text": toc_text,
         }
 
     return asyncio.run(page_index_builder())

@@ -35,7 +35,8 @@ STEP_ORDER = [
 STEP_PROMPTS = {
     LessonStep.IMPORT: (
         "你现在进入了【预热导入】阶段。请先快速浏览本节内容的核心概念。\n"
-        "节点标题：{node_title}\n内容摘要：{content_preview}\n\n"
+        "节点标题：{node_title}\n内容摘要：{content_preview}\n"
+        "本节知识点：{knowledge_point_titles}\n\n"
         "准备好了吗？回复「继续」进入讲解阶段。"
     ),
     LessonStep.EXPLAIN: (
@@ -99,6 +100,34 @@ async def get_or_create_lesson(
             _pi_summary = node.pi_nodes_json[0].get("summary", "")
         content_preview = (_pi_summary[:300] + "...") if _pi_summary else "暂无内容"
 
+        # Query associated knowledge points
+        knowledge_point_titles = ""
+        knowledge_points = []
+        if node:
+            from app.models.knowledge_point import KnowledgePoint, KnowledgePointMapping
+            kp_result = await db.execute(
+                select(KnowledgePoint)
+                .join(KnowledgePointMapping, KnowledgePoint.id == KnowledgePointMapping.knowledge_point_id)
+                .where(KnowledgePointMapping.knowledge_node_id == node.id)
+            )
+            kp_rows = kp_result.scalars().all()
+            if kp_rows:
+                # 构建带层级和摘要的知识点标题列表
+                kp_titles_with_level = []
+                for kp in kp_rows:
+                    indent = "  " * (kp.level - 1)
+                    kp_titles_with_level.append(f"{indent}{kp.title}{'：' + kp.summary if kp.summary else ''}")
+                knowledge_point_titles = "\n".join(kp_titles_with_level)
+                knowledge_points = [{"id": kp.id, "title": kp.title, "level": kp.level, "summary": kp.summary or ""} for kp in kp_rows]
+            else:
+                knowledge_point_titles = "（暂无知识点标签）"
+
+        step_prompt = STEP_PROMPTS.get(lesson.current_step, "").format(
+            node_title=node_title,
+            content_preview=content_preview,
+            knowledge_point_titles=knowledge_point_titles,
+        )
+
         return {
             "lesson_id": lesson.id,
             "student_id": lesson.student_id,
@@ -108,9 +137,8 @@ async def get_or_create_lesson(
             "is_completed": lesson.is_completed,
             "node_title": node_title,
             "content_preview": content_preview,
-            "step_prompt": STEP_PROMPTS.get(lesson.current_step, "").format(
-                node_title=node_title, content_preview=content_preview
-            ),
+            "knowledge_points": knowledge_points,
+            "step_prompt": step_prompt,
         }
 
 
@@ -217,13 +245,37 @@ async def advance_lesson_step(
         step_prompt = ""
         example_content = ""
 
+        # Query associated knowledge points for prompt enrichment
+        knowledge_point_titles = ""
+        knowledge_points = []
+        if node:
+            from app.models.knowledge_point import KnowledgePoint, KnowledgePointMapping
+            kp_result = await db.execute(
+                select(KnowledgePoint)
+                .join(KnowledgePointMapping, KnowledgePoint.id == KnowledgePointMapping.knowledge_point_id)
+                .where(KnowledgePointMapping.knowledge_node_id == node.id)
+            )
+            kp_rows = kp_result.scalars().all()
+            if kp_rows:
+                # 构建带层级和摘要的知识点标题列表
+                kp_titles_with_level = []
+                for kp in kp_rows:
+                    indent = "  " * (kp.level - 1)
+                    kp_titles_with_level.append(f"{indent}{kp.title}{'：' + kp.summary if kp.summary else ''}")
+                knowledge_point_titles = "\n".join(kp_titles_with_level)
+                knowledge_points = [{"id": kp.id, "title": kp.title, "level": kp.level, "summary": kp.summary or ""} for kp in kp_rows]
+            else:
+                knowledge_point_titles = "（暂无知识点标签）"
+
         if lesson.is_completed:
             step_prompt = "🎉 恭喜你完成了本节的全部学习！"
         else:
             # 基础模板
             base_prompt = STEP_PROMPTS.get(lesson.current_step, "")
             step_prompt = base_prompt.format(
-                node_title=node_title, content_preview=content_preview
+                node_title=node_title,
+                content_preview=content_preview,
+                knowledge_point_titles=knowledge_point_titles,
             )
 
             # 动态增强
@@ -242,4 +294,5 @@ async def advance_lesson_step(
             "material_id": node.material_id if node else None,
             "step_prompt": step_prompt,
             "example_content": example_content,  # Pass it out so the router can catch it
+            "knowledge_points": knowledge_points,
         }

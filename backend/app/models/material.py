@@ -63,6 +63,9 @@ class KnowledgeNode(Base):
         "KnowledgeContent", back_populates="node", cascade="all, delete-orphan"
     )
     quizzes = relationship("NodeQuiz", back_populates="node")
+    kp_mappings = relationship(
+        "KnowledgePointMapping", back_populates="knowledge_node", cascade="all, delete-orphan"
+    )
 
 
 class KnowledgeContent(Base):

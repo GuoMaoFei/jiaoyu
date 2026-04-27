@@ -18,6 +18,12 @@ export const LESSON_STEP_META: Record<LessonStep, { label: string; icon: string;
 };
 
 /** 闯关状态响应 — 对齐后端 LessonStatusResponse */
+export interface KnowledgePointBrief {
+    id: string;
+    title: string;
+    level: number;
+}
+
 export interface LessonStatusResponse {
     lesson_id: string;
     student_id?: string;
@@ -28,6 +34,7 @@ export interface LessonStatusResponse {
     node_title?: string;
     content_preview?: string;
     step_prompt?: string;
+    knowledge_points?: KnowledgePointBrief[];
     message?: string;
     error?: string;
 }

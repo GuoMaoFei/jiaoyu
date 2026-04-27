@@ -59,13 +59,20 @@ async def assessor_node(state: AgentState):
     chain = prompt | model_with_tools
 
     # 4. Invoke the Model
-    response = await chain.ainvoke(
-        {
-            "messages": state["messages"],
-            "student_id": state["student_id"],
-            "material_id": state["material_id"] or "Unknown",
-            "node_id": node_id,
-        }
-    )
+    try:
+        response = await chain.ainvoke(
+            {
+                "messages": state["messages"],
+                "student_id": state["student_id"],
+                "material_id": state["material_id"] or "Unknown",
+                "node_id": node_id,
+            }
+        )
 
-    return {"messages": [response]}
+        from app.agent.state import strip_thinking_blocks
+        response = strip_thinking_blocks(response)
+
+        return {"messages": [response]}
+    except Exception as e:
+        print(f"[ASSESSOR ERROR] LLM call failed: {e}")
+        return {"messages": []}

@@ -69,6 +69,7 @@ class BookshelfItemResponse(BaseModel):
     health_score: int = 0
     activated_at: Optional[datetime] = None
     is_activated: bool = False
+    processing_status: Optional[str] = None  # pending/processing/completed/failed/none
 
 
 class BookshelfResponse(BaseModel):

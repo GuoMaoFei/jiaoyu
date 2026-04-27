@@ -29,11 +29,11 @@ task_params:
     top_p: 1
   toc_transform:
     temperature: 0
-    max_tokens: 4000
+    max_tokens: 32000
     top_p: 1
   node_summary:
     temperature: 0.3
-    max_tokens: 500
+    max_tokens: 4000
     top_p: 0.9
   toc_generate:
     temperature: 0
@@ -51,3 +51,14 @@ if_add_node_id: "yes"
 if_add_node_summary: "yes"
 if_add_doc_description: "no"
 if_add_node_text: "no"
+
+# LLM optimization config
+rule_based_toc_detect: true
+rule_based_page_index_detect: true
+rule_based_title_check: true
+rule_based_dual_tree_map: true
+verify_sample_size: 5
+fix_max_attempts: 2
+skip_toc_completeness_check: true
+summary_batch_size: 6
+dual_tree_map_coverage_threshold: 0.8
